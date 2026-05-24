@@ -95,6 +95,7 @@ class LLMProvider(LLMProviderBase):
             "model": self.model_name,
             "messages": dialogue,
             "stream": True,
+            "user": "xiaozhi-fixed-session",
         }
 
         # 添加可选参数,只有当参数不为None时才添加
@@ -142,6 +143,7 @@ class LLMProvider(LLMProviderBase):
             "messages": dialogue,
             "stream": True,
             "tools": functions,
+            "user": "xiaozhi-fixed-session",
         }
 
         optional_params = {

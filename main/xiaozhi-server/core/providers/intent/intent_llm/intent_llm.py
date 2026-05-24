@@ -207,6 +207,12 @@ class IntentProvider(IntentProviderBase):
         logger.bind(tag=TAG).debug(f"开始LLM意图识别调用, 模型: {model_info}")
 
         try:
+            # 确保提示词是UTF-8编码的字符串
+            if isinstance(prompt_music, bytes):
+                prompt_music = prompt_music.decode('utf-8')
+            if isinstance(user_prompt, bytes):
+                user_prompt = user_prompt.decode('utf-8')
+
             intent = self.llm.response_no_stream(
                 system_prompt=prompt_music, user_prompt=user_prompt
             )
