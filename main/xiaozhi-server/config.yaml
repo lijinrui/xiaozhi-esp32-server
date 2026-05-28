@@ -610,6 +610,11 @@ VAD:
 LLM:
   # 所有openai类型均可以修改超参，以AliLLM为例
   # 当前支持的type为openai、dify、ollama，可自行适配
+  # 仅对 type: openai 的 provider 生效的可选字段：
+  #   single_turn: true|false（默认 false）
+  #     开启后每次请求只发 system + few-shot + 本轮消息（含同回合 tool_call 链），
+  #     不再带历史。适用于上游自行维护会话上下文的场景（如 openclaw 等）。
+  #     本地短期对话 self.dialogue 仍正常累积，不影响 function-call 多步递归。
   AliLLM:
     # 定义LLM API类型
     type: openai
