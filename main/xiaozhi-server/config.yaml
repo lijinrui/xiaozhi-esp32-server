@@ -615,7 +615,12 @@ LLM:
   #     开启后每次请求只发 system + few-shot + 本轮消息（含同回合 tool_call 链），
   #     不再带历史。适用于上游自行维护会话上下文的场景（如 openclaw 等）。
   #     本地短期对话 self.dialogue 仍正常累积，不影响 function-call 多步递归。
+  # 所有 provider 通用的可选字段：
+  #   aliases: [豆包, 字节, doubao]
+  #     用户口述别名，用于 switch_llm 插件按自然语言匹配本模块。
+  #     不写也行，配置 key 本身（如 DoubaoLLM）始终可用。
   AliLLM:
+    aliases: [通义, 千问, qwen, 阿里]
     # 定义LLM API类型
     type: openai
     # 可在这里找到你的 api_key https://bailian.console.aliyun.com/?apiKey=1#/api-key
@@ -639,6 +644,7 @@ LLM:
     # Tips！：Ali_memory未实现多用户存储记忆(记忆按id调用)
     ali_memory_id: false
   DoubaoLLM:
+    aliases: [豆包, 字节, doubao]
     # 定义LLM API类型
     type: openai
     # 先开通服务，打开以下网址，开通的服务搜索Doubao-1.5-pro，开通它
@@ -649,6 +655,7 @@ LLM:
     model_name: doubao-1-5-pro-32k-250115
     api_key: 你的doubao web key
   DeepSeekLLM:
+    aliases: [深度求索, deepseek, ds]
     # 定义LLM API类型
     type: openai
     # 可在这里找到你的api key https://platform.deepseek.com/
@@ -656,6 +663,7 @@ LLM:
     url: https://api.deepseek.com
     api_key: 你的deepseek web key
   ChatGLMLLM:
+    aliases: [智谱, glm, 智谱清言]
     # 定义LLM API类型
     type: openai
     # glm-4-flash 是免费的，但是还是需要注册填写api_key的

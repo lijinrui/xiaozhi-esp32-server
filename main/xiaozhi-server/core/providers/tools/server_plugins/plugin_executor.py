@@ -59,6 +59,7 @@ class ServerPluginExecutor(ToolExecutor):
             "get_lunar",
             "enter_recording_mode",
             "exit_recording_mode",
+            "switch_llm",
         ]
 
         # 获取配置中的函数
