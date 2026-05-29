@@ -1,6 +1,6 @@
 import os
 import json
-import time
+import threading
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -13,7 +13,9 @@ if TYPE_CHECKING:
 TAG = __name__
 logger = setup_logging()
 
-RECORDING_ROOT = "data/recordings"
+# 相对 xiaozhi-server/ 根目录的绝对路径，避免依赖启动 CWD
+_SERVER_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+RECORDING_ROOT = os.path.join(_SERVER_ROOT, "data", "recordings")
 RECORDING_VAD_TIMEOUT_SECONDS = 1800
 
 enter_recording_mode_desc = {
@@ -24,6 +26,8 @@ enter_recording_mode_desc = {
             "当用户希望把设备变成'常驻拾音器/录音模式/会议记录/只听不说'时调用。"
             "进入后设备只做 ASR + 说话人识别并持久化，不再生成 LLM 回复或 TTS 播报。"
             "典型触发：'切换到录音模式'、'开始录音'、'开会议记录'、'只听别说话'等。"
+            "仅切换运行模式，**不**是切换底层大模型（如豆包/deepseek 走 "
+            "switch_llm）或角色（走 change_role）。"
         ),
         "parameters": {
             "type": "object",
@@ -76,6 +80,9 @@ def _open_session(conn: "ConnectionHandler", reason: str | None) -> dict:
         "file_path": file_path,
         "file_handle": handle,
         "start_time": start_dt,
+        # 保护 append（ASR 线程）与 close（main loop / disconnect）之间的竞争
+        "lock": threading.Lock(),
+        "closed": False,
     }
 
 
@@ -90,8 +97,11 @@ def append_recording(conn: "ConnectionHandler", text: str) -> None:
         "content": text,
     }
     try:
-        session["file_handle"].write(json.dumps(record, ensure_ascii=False) + "\n")
-        session["file_handle"].flush()
+        with session["lock"]:
+            if session.get("closed"):
+                return
+            session["file_handle"].write(json.dumps(record, ensure_ascii=False) + "\n")
+            session["file_handle"].flush()
     except Exception as e:
         logger.bind(tag=TAG).error(f"写录音失败: {e}")
 
@@ -102,14 +112,18 @@ def close_recording_session(conn: "ConnectionHandler", reason: str = "manual") -
     if not session:
         return
     try:
-        end = {
-            "_meta": "session_end",
-            "ts": datetime.now().isoformat(timespec="seconds"),
-            "reason": reason,
-        }
-        session["file_handle"].write(json.dumps(end, ensure_ascii=False) + "\n")
-        session["file_handle"].flush()
-        session["file_handle"].close()
+        with session["lock"]:
+            if session.get("closed"):
+                return
+            session["closed"] = True
+            end = {
+                "_meta": "session_end",
+                "ts": datetime.now().isoformat(timespec="seconds"),
+                "reason": reason,
+            }
+            session["file_handle"].write(json.dumps(end, ensure_ascii=False) + "\n")
+            session["file_handle"].flush()
+            session["file_handle"].close()
     except Exception as e:
         logger.bind(tag=TAG).error(f"关闭录音文件失败: {e}")
     finally:

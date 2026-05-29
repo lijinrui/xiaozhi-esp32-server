@@ -142,7 +142,13 @@ class LLMProvider(LLMProviderBase):
             turn_start = i
             break
 
-        current_turn = history if turn_start is None else history[turn_start:]
+        # 找不到真实 user turn（冷启动 / memory warmup）：不裁剪，返回原 messages
+        # 避免发出无 user 消息的请求触发 400
+        if turn_start is None:
+            logger.bind(tag=TAG).debug("single_turn 未找到 user turn，跳过裁剪")
+            return messages
+
+        current_turn = history[turn_start:]
 
         result = []
         if systems:

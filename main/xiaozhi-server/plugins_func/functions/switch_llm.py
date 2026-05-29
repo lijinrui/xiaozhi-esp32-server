@@ -19,6 +19,9 @@ switch_llm_function_desc = {
         "description": (
             "当用户希望切换底层大模型时调用，例如'切换到豆包'、'换成 deepseek'、"
             "'用通义千问'、'切回智谱'。仅切换主对话模型，不影响意图识别和记忆。"
+            "**不**用于切换录音模式或角色（这两个有专门的 enter_recording_mode "
+            "和 change_role 函数）。必须能从用户话里识别到具体模型名（豆包/"
+            "deepseek/通义/智谱等）才触发；只说'切换/换一个'没有指向具体模型时不要调用。"
         ),
         "parameters": {
             "type": "object",
