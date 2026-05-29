@@ -8,6 +8,18 @@ if TYPE_CHECKING:
 from core.utils.util import audio_to_data
 from core.handle.abortHandle import handleAbortMessage
 from core.handle.intentHandler import handle_user_intent
+from plugins_func.functions.recording_mode import (
+    append_recording,
+    exit_recording_mode,
+)
+
+# 录音模式退出兜底关键词：当 intent_llm 没识别出退出意图时，子串匹配触发
+RECORDING_EXIT_FALLBACK_KEYWORDS = (
+    "退出录音",
+    "结束录音",
+    "停止录音",
+    "关闭录音",
+)
 from core.utils.output_counter import check_device_output_limit
 from core.handle.sendAudioHandle import send_stt_message, SentenceType
 
@@ -41,6 +53,7 @@ async def startToChat(conn: "ConnectionHandler", text):
     speaker_name = None
     language_tag = None
     actual_text = text
+    speech_content = text  # 仅供录音模式落盘使用（不含 JSON 包装）
 
     try:
         # 尝试解析JSON格式的输入
@@ -50,6 +63,7 @@ async def startToChat(conn: "ConnectionHandler", text):
                 speaker_name = data["speaker"]
                 language_tag = data["language"]
                 actual_text = data["content"]
+                speech_content = data["content"]
                 conn.logger.bind(tag=TAG).info(f"解析到说话人信息: {speaker_name}")
 
                 # 直接使用JSON格式的文本，不解析
@@ -87,6 +101,21 @@ async def startToChat(conn: "ConnectionHandler", text):
         # 如果意图已被处理，不再进行聊天
         return
 
+    # 录音模式：意图未触发退出/其他 plugin 时，子串兜底；否则落盘 + 跳过主 LLM
+    if getattr(conn, "recording_session", None):
+        if any(kw in actual_text for kw in RECORDING_EXIT_FALLBACK_KEYWORDS):
+            conn.logger.bind(tag=TAG).info(f"录音模式子串兜底退出: {actual_text}")
+            result = exit_recording_mode(conn)
+            await send_stt_message(conn, actual_text)
+            if result and result.response:
+                from core.handle.intentHandler import speak_txt
+                speak_txt(conn, result.response)
+            return
+        # 正常录音：写一行 JSONL，前端显示 STT，不调主 LLM、不 TTS
+        append_recording(conn, speech_content)
+        await send_stt_message(conn, actual_text)
+        return
+
     # 意图未被处理，继续常规聊天流程，使用实际文本内容
     await send_stt_message(conn, actual_text)
 
@@ -103,9 +132,13 @@ async def no_voice_close_connect(conn: "ConnectionHandler", have_voice):
     # 只有在已经初始化过时间戳的情况下才进行超时检查
     if conn.last_activity_time > 0.0:
         no_voice_time = time.time() * 1000 - conn.last_activity_time
-        close_connection_no_voice_time = int(
-            conn.config.get("close_connection_no_voice_time", 120)
-        )
+        if getattr(conn, "recording_session", None):
+            # 录音模式下长时间静默是正常场景，使用录音模式专用超时（默认 30 分钟）
+            close_connection_no_voice_time = 1800
+        else:
+            close_connection_no_voice_time = int(
+                conn.config.get("close_connection_no_voice_time", 120)
+            )
         if (
             not conn.close_after_chat
             and no_voice_time > 1000 * close_connection_no_voice_time

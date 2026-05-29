@@ -157,6 +157,9 @@ class ConnectionHandler:
         self.asr_audio_queue = queue.Queue()
         self.current_speaker = None  # 存储当前说话人
 
+        # 录音模式 session：None 表示未激活；激活时为 {file_path, file_handle, start_time}
+        self.recording_session = None
+
         # llm相关变量
         self.dialogue = Dialogue()
 
@@ -1387,6 +1390,18 @@ class ConnectionHandler:
     async def close(self, ws=None):
         """资源清理方法"""
         try:
+            # 关闭录音模式文件句柄（若激活），保证断连即落盘
+            if getattr(self, "recording_session", None):
+                try:
+                    from plugins_func.functions.recording_mode import (
+                        close_recording_session,
+                    )
+                    close_recording_session(self, reason="disconnect")
+                except Exception as rec_err:
+                    self.logger.bind(tag=TAG).error(
+                        f"关闭录音 session 失败: {rec_err}"
+                    )
+
             # 清理 VAD 连接资源
             if (
                     hasattr(self, "vad")
