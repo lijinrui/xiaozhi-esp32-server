@@ -6,6 +6,13 @@ if TYPE_CHECKING:
 from core.handle.textMessageHandlerRegistry import TextMessageHandlerRegistry
 
 TAG = __name__
+MAX_LOG_MESSAGE_LENGTH = 1000
+
+
+def _format_message_for_log(message: str) -> str:
+    if len(message) <= MAX_LOG_MESSAGE_LENGTH:
+        return message
+    return f"{message[:MAX_LOG_MESSAGE_LENGTH]}...<truncated {len(message) - MAX_LOG_MESSAGE_LENGTH} chars>"
 
 
 class TextMessageProcessor:
@@ -25,14 +32,18 @@ class TextMessageProcessor:
                 message_type = msg_json.get("type")
 
                 # 记录日志
-                conn.logger.bind(tag=TAG).info(f"收到{message_type}消息：{message}")
+                conn.logger.bind(tag=TAG).info(
+                    f"收到{message_type}消息：{_format_message_for_log(message)}"
+                )
 
                 # 获取并执行处理器
                 handler = self.registry.get_handler(message_type)
                 if handler:
                     await handler.handle(conn, msg_json)
                 else:
-                    conn.logger.bind(tag=TAG).error(f"收到未知类型消息：{message}")
+                    conn.logger.bind(tag=TAG).error(
+                        f"收到未知类型消息：{_format_message_for_log(message)}"
+                    )
             # 处理纯数字消息
             elif isinstance(msg_json, int):
                 conn.logger.bind(tag=TAG).info(f"收到数字消息：{message}")
@@ -40,5 +51,7 @@ class TextMessageProcessor:
 
         except json.JSONDecodeError:
             # 非JSON消息直接转发
-            conn.logger.bind(tag=TAG).error(f"解析到错误的消息：{message}")
+            conn.logger.bind(tag=TAG).error(
+                f"解析到错误的消息：{_format_message_for_log(message)}"
+            )
             await conn.websocket.send(message)

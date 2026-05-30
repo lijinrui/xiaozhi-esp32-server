@@ -137,6 +137,10 @@ class ConnectionHandler:
         self.memory = _memory
         self.intent = _intent
 
+        # 连接创建时立即根据配置绑定意图识别专用 LLM，避免后台线程竞态
+        if self.intent is not None:
+            self._bind_intent_llm()
+
         # 为每个连接单独管理声纹识别
         self.voiceprint_provider = None
 
@@ -855,6 +859,45 @@ class ConnectionHandler:
                 # 否则使用主LLM
                 self.memory.set_llm(self.llm)
                 self.logger.bind(tag=TAG).info("使用主LLM作为意图识别模型")
+
+    def _bind_intent_llm(self):
+        """根据配置绑定意图识别专用 LLM（连接创建时立即执行）"""
+        try:
+            selected_intent = self.config.get("selected_module", {}).get("Intent")
+            intent_cfg = self.config.get("Intent", {}).get(selected_intent, {})
+            intent_type = intent_cfg.get("type")
+            if intent_type != "intent_llm":
+                return
+
+            # 如果已经绑定过了，跳过
+            if getattr(self.intent, "llm", None) is not None:
+                return
+
+            intent_llm_name = intent_cfg.get("llm")
+            llm_providers = self.config.get("LLM") or {}
+            self.logger.bind(tag=TAG).debug(
+                f"_bind_intent_llm: intent_llm_name={intent_llm_name}, "
+                f"LLM keys={list(llm_providers.keys()) if llm_providers else 'EMPTY/None'}"
+            )
+            if intent_llm_name and intent_llm_name in llm_providers:
+                from core.utils import llm as llm_utils
+                intent_llm_config = llm_providers[intent_llm_name]
+                intent_llm_type = intent_llm_config.get("type", intent_llm_name)
+                intent_llm = llm_utils.create_instance(intent_llm_type, intent_llm_config)
+                self.intent.set_llm(intent_llm)
+                self.logger.bind(tag=TAG).info(
+                    f"意图识别已绑定专用LLM: {intent_llm_name}"
+                )
+            else:
+                self.logger.bind(tag=TAG).warning(
+                    f"意图识别配置的LLM '{intent_llm_name}' 不在LLM配置中，尝试使用主LLM"
+                )
+                if self.llm is not None:
+                    self.intent.set_llm(self.llm)
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            self.logger.bind(tag=TAG).error(f"绑定意图识别专用LLM失败: {e}\n{tb}")
 
     def _initialize_intent(self):
         if self.intent is None:

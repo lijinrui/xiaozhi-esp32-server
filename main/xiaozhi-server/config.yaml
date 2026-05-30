@@ -389,6 +389,17 @@ ASR:
     model_dir: models/sherpa-onnx-paraformer-zh-small-2024-03-09
     output_dir: tmp/
     model_type: paraformer
+  SherpaASRStream:
+    # Sherpa-ONNX 流式（Streaming）语音识别
+    # 需要流式模型（streaming model），支持 paraformer / transducer / zipformer
+    # 不支持 sense_voice 等非流式模型
+    type: sherpa_onnx_stream
+    model_dir: models/sherpa-onnx-streaming-paraformer-bilingual-zh-en-2023-06-21
+    model_type: paraformer
+    encoder: encoder.int8.onnx
+    decoder: decoder.int8.onnx
+    tokens: tokens.txt
+    output_dir: tmp/
   DoubaoASR:
     # 可以在这里申请相关Key等信息
     # https://console.volcengine.com/speech/app

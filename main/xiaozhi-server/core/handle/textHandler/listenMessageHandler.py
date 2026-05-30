@@ -31,6 +31,8 @@ class ListenTextMessageHandler(TextMessageHandler):
         if msg_json["state"] == "start":
             # 设备从播放模式切回录音模式,清除所有音频状态和缓冲区
             conn.reset_audio_states()
+            if hasattr(conn.asr, "reset_stream_state"):
+                conn.asr.reset_stream_state()
         elif msg_json["state"] == "stop":
             conn.client_voice_stop = True
             if conn.asr.interface_type == InterfaceType.STREAM:

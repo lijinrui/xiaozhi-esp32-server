@@ -9,6 +9,18 @@ SERVER_VERSION = "0.9.3"
 _logger_initialized = False
 
 
+class NonBlockingStreamSink:
+    def __init__(self, stream):
+        self.stream = stream
+
+    def write(self, message):
+        try:
+            self.stream.write(message)
+            self.stream.flush()
+        except BlockingIOError:
+            pass
+
+
 def get_module_abbreviation(module_name, module_dict):
     """获取模块名称的缩写，如果为空则返回00
     如果名称中包含下划线，则返回下划线后面的前两个字符
@@ -84,7 +96,13 @@ def setup_logging():
         logger.remove()
 
         # 输出到控制台
-        logger.add(sys.stdout, format=log_format, level=log_level, filter=formatter)
+        logger.add(
+            NonBlockingStreamSink(sys.stdout),
+            format=log_format,
+            level=log_level,
+            filter=formatter,
+            catch=True,
+        )
 
         # 输出到文件 - 统一目录，按大小轮转
         # 日志文件完整路径

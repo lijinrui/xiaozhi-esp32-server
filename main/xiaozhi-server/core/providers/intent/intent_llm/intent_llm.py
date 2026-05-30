@@ -73,7 +73,7 @@ class IntentProvider(IntentProviderBase):
             "处理步骤:\n"
             "1. 分析用户输入，确定用户意图\n"
             "2. 检查是否为上述基础信息查询（时间、日期等），如是则返回result_for_context\n"
-            "3. 从可用函数列表中选择最匹配的函数\n"
+            "3. 只能从上面的可用函数列表中选择最匹配的函数，禁止返回列表外的函数名\n"
             "4. 如果找到匹配的函数，生成对应的function_call 格式\n"
             '5. 如果没有找到匹配的函数，返回{"function_call": {"name": "continue_chat"}}\n\n'
             "返回格式要求：\n"
@@ -110,8 +110,9 @@ class IntentProvider(IntentProviderBase):
             "1. 只返回JSON格式，不要包含任何其他文字\n"
             '2. 优先检查用户查询是否为基础信息（时间、日期等），如是则返回{"function_call": {"name": "result_for_context"}}，不需要arguments参数\n'
             '3. 如果没有找到匹配的函数，返回{"function_call": {"name": "continue_chat"}}\n'
-            "4. 确保返回的JSON格式正确，包含所有必要的字段\n"
-            "5. result_for_context不需要任何参数，系统会自动从上下文获取信息\n"
+            "4. 禁止返回未出现在可用函数列表中的函数名，即使用户问题看起来适合某个常见工具\n"
+            "5. 确保返回的JSON格式正确，包含所有必要的字段\n"
+            "6. result_for_context不需要任何参数，系统会自动从上下文获取信息\n"
             "特殊说明：\n"
             "- 当用户单次输入包含多个指令时（如'打开灯并且调高音量'）\n"
             "- 请返回多个function_call组成的JSON数组\n"
@@ -250,6 +251,16 @@ class IntentProvider(IntentProviderBase):
                 function_data = intent_data["function_call"]
                 function_name = function_data.get("name")
                 function_args = function_data.get("arguments", {})
+
+                if (
+                    function_name
+                    and function_name not in ("continue_chat", "result_for_context")
+                    and not conn.func_handler.has_tool(function_name)
+                ):
+                    logger.bind(tag=TAG).warning(
+                        f"llm 返回了未启用的意图函数: {function_name}，已转为普通对话"
+                    )
+                    return '{"function_call": {"name": "continue_chat"}}'
 
                 # 记录识别到的function call
                 logger.bind(tag=TAG).info(

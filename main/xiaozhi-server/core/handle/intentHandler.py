@@ -69,6 +69,14 @@ async def analyze_intent_with_llm(conn: "ConnectionHandler", text):
         conn.logger.bind(tag=TAG).warning("意图识别服务未初始化")
         return None
 
+    # 兜底：如果 intent 没有绑定 LLM，尝试重新绑定
+    if getattr(conn.intent, "llm", None) is None:
+        conn.logger.bind(tag=TAG).warning("意图识别LLM未绑定，尝试重新绑定...")
+        conn._bind_intent_llm()
+        if getattr(conn.intent, "llm", None) is None:
+            conn.logger.bind(tag=TAG).error("意图识别LLM绑定失败，跳过意图识别")
+            return None
+
     # 对话历史记录
     dialogue = conn.dialogue
     try:
