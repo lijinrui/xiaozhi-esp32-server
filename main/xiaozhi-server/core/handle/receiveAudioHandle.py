@@ -66,8 +66,7 @@ async def startToChat(conn: "ConnectionHandler", text):
                 speech_content = data["content"]
                 conn.logger.bind(tag=TAG).info(f"解析到说话人信息: {speaker_name}")
 
-                # 直接使用JSON格式的文本，不解析
-                actual_text = text
+                # actual_text 已经是 data["content"]（纯文本），保留 speaker 信息到 conn
     except (json.JSONDecodeError, KeyError):
         # 如果解析失败，继续使用原始文本
         pass

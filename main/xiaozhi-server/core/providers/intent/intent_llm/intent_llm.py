@@ -11,6 +11,8 @@ import json
 import hashlib
 import time
 
+_EMOTION_TAG_RE = re.compile(r'\[\[emotion:[a-zA-Z_]+\]\]')
+
 
 
 TAG = __name__
@@ -27,7 +29,8 @@ class IntentProvider(IntentProviderBase):
 
         self.cache_manager = cache_manager
         self.CacheType = CacheType
-        self.history_count = 4  # 默认使用最近4条对话记录
+        self.history_count = config.get("history_count", 1)  # 意图识别历史条数，默认1条足够
+        self.temperature = config.get("temperature")  # 意图识别专用温度，默认走LLM配置
 
     def get_intent_system_prompt(self, functions_list: str) -> str:
         """
@@ -107,6 +110,14 @@ class IntentProvider(IntentProviderBase):
             '返回: {"function_call": {"name": "handle_exit_intent", "arguments": {"say_goodbye": "goodbye"}}}\n'
             "```\n"
             "```\n"
+            "用户: 打开客厅的灯\n"
+            '返回: {"function_call": {"name": "hass_set_state", "arguments": {"entity_id": "light.ke_ting_deng_dai", "state": {"type": "turn_on"}}}}\n'
+            "```\n"
+            "```\n"
+            "用户: 关闭客厅所有的灯\n"
+            '返回: {"function_calls": [{"name": "hass_set_state", "arguments": {"entity_id": "light.ke_ting_deng_dai", "state": {"type": "turn_off"}}}, {"name": "hass_set_state", "arguments": {"entity_id": "light.ke_ting_gui_dao_deng", "state": {"type": "turn_off"}}}, {"name": "hass_set_state", "arguments": {"entity_id": "light.ke_ting_tong_deng", "state": {"type": "turn_off"}}}]}\n'
+            "```\n"
+            "```\n"
             "用户: 你好啊\n"
             '返回: {"function_call": {"name": "continue_chat"}}\n'
             "```\n\n"
@@ -118,9 +129,9 @@ class IntentProvider(IntentProviderBase):
             "5. 确保返回的JSON格式正确，包含所有必要的字段\n"
             "6. result_for_context不需要任何参数，系统会自动从上下文获取信息\n"
             "特殊说明：\n"
-            "- 当用户单次输入包含多个指令时（如'打开灯并且调高音量'）\n"
-            "- 请返回多个function_call组成的JSON数组\n"
-            "- 示例：{'function_calls': [{name:'light_on'}, {name:'volume_up'}]}\n\n"
+            "- 当用户说'所有'、'全部'时，如果该位置有多个同类设备，必须返回 function_calls 数组，每个设备单独调用一次\n"
+            "- 当用户单次输入包含多个不同指令时（如'打开灯并且调高音量'），也请返回 function_calls 数组\n"
+            "- function_calls 格式示例：{'function_calls': [{...}, {...}]}\n\n"
             "【最终警告】绝对禁止输出任何自然语言、表情符号或解释文字！只能输出有效JSON格式！违反此规则将导致系统错误！"
         )
         return prompt
@@ -192,13 +203,14 @@ class IntentProvider(IntentProviderBase):
 
         logger.bind(tag=TAG).debug(f"User prompt: {prompt_music}")
 
-        # 构建用户对话历史的提示
+        # 构建用户对话历史的提示（过滤掉 emotion 标记，避免干扰意图识别）
         msgStr = ""
 
         # 获取最近的对话历史
         start_idx = max(0, len(dialogue_history) - self.history_count)
         for i in range(start_idx, len(dialogue_history)):
-            msgStr += f"{dialogue_history[i].role}: {dialogue_history[i].content}\n"
+            clean_content = _EMOTION_TAG_RE.sub('', dialogue_history[i].content)
+            msgStr += f"{dialogue_history[i].role}: {clean_content}\n"
 
         msgStr += f"User: {text}\n"
         user_prompt = f"current dialogue:\n{msgStr}"
@@ -218,8 +230,12 @@ class IntentProvider(IntentProviderBase):
             if isinstance(user_prompt, bytes):
                 user_prompt = user_prompt.decode('utf-8')
 
+            # 如配置了意图识别专用 temperature 则使用，否则走 LLM 默认配置
+            llm_kwargs = {}
+            if self.temperature is not None:
+                llm_kwargs["temperature"] = self.temperature
             intent = self.llm.response_no_stream(
-                system_prompt=prompt_music, user_prompt=user_prompt
+                system_prompt=prompt_music, user_prompt=user_prompt, **llm_kwargs
             )
         except Exception as e:
             logger.bind(tag=TAG).error(f"Error in intent detection LLM call: {e}")
@@ -236,10 +252,34 @@ class IntentProvider(IntentProviderBase):
 
         # 清理和解析响应
         intent = intent.strip()
-        # 尝试提取JSON部分
-        match = re.search(r"\{.*\}", intent, re.DOTALL)
-        if match:
-            intent = match.group(0)
+
+        # 改进：先尝试按行提取多个 JSON 对象（解决多个 function_call 贪婪匹配粘在一起的问题）
+        json_lines = [line.strip() for line in intent.split('\n')
+                      if line.strip().startswith('{') and line.strip().endswith('}')]
+        function_calls = []
+        parsed_intent = None
+        for line in json_lines:
+            try:
+                obj = json.loads(line)
+                if "function_call" in obj:
+                    function_calls.append(obj["function_call"])
+                elif parsed_intent is None:
+                    parsed_intent = obj
+            except json.JSONDecodeError:
+                continue
+
+        if len(function_calls) == 1:
+            intent = json.dumps({"function_call": function_calls[0]})
+        elif len(function_calls) > 1:
+            intent = json.dumps({"function_calls": function_calls})
+            logger.bind(tag=TAG).info(f"识别到多个意图调用: {len(function_calls)} 个")
+        elif parsed_intent is not None:
+            intent = json.dumps(parsed_intent)
+        else:
+            # 回退到原始贪婪匹配
+            match = re.search(r"\{.*\}", intent, re.DOTALL)
+            if match:
+                intent = match.group(0)
 
         # 记录总处理时间
         total_time = time.time() - total_start_time
@@ -250,7 +290,7 @@ class IntentProvider(IntentProviderBase):
         # 尝试解析为JSON
         try:
             intent_data = json.loads(intent)
-            # 如果包含function_call，则格式化为适合处理的格式
+            # 处理单个 function_call
             if "function_call" in intent_data:
                 function_data = intent_data["function_call"]
                 function_name = function_data.get("name")
@@ -266,31 +306,28 @@ class IntentProvider(IntentProviderBase):
                     )
                     return '{"function_call": {"name": "continue_chat"}}'
 
-                # 记录识别到的function call
                 logger.bind(tag=TAG).info(
                     f"llm 识别到意图: {function_name}, 参数: {function_args}"
                 )
 
-                # 处理不同类型的意图
                 if function_name == "result_for_context":
-                    # 处理基础信息查询，直接从context构建结果
                     logger.bind(tag=TAG).info(
                         "检测到result_for_context意图，将使用上下文信息直接回答"
                     )
-
                 elif function_name == "continue_chat":
-                    # 处理普通对话
-                    # 保留非工具相关的消息
                     clean_history = [
                         msg
                         for msg in conn.dialogue.dialogue
                         if msg.role not in ["tool", "function"]
                     ]
                     conn.dialogue.dialogue = clean_history
-
                 else:
-                    # 处理函数调用
                     logger.bind(tag=TAG).info(f"检测到函数调用意图: {function_name}")
+
+            # 处理多个 function_calls
+            elif "function_calls" in intent_data:
+                names = [fc.get("name") for fc in intent_data["function_calls"]]
+                logger.bind(tag=TAG).info(f"检测到多个函数调用意图: {names}")
 
             # 统一缓存处理和返回
             self.cache_manager.set(self.CacheType.INTENT, cache_key, intent)

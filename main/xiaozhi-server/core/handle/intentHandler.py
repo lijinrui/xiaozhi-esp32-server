@@ -228,6 +228,71 @@ async def process_intent_result(
             # 将函数执行放在线程池中
             conn.executor.submit(process_function_call)
             return True
+
+        # 处理多个并行 function_calls
+        elif "function_calls" in intent_data:
+            function_calls = intent_data["function_calls"]
+            valid_calls = []
+            for fc in function_calls:
+                fn = fc.get("name")
+                if fn == "continue_chat":
+                    continue
+                if getattr(conn, "recording_session", None) and fn != "exit_recording_mode":
+                    conn.logger.bind(tag=TAG).info(f"录音模式忽略非退出意图: {fn}")
+                    continue
+                if fn and fn not in ("result_for_context",) and not conn.func_handler.has_tool(fn):
+                    conn.logger.bind(tag=TAG).warning(f"忽略未启用的意图函数: {fn}，转为普通对话")
+                    return False
+                valid_calls.append(fc)
+
+            if not valid_calls:
+                return False
+
+            await send_stt_message(conn, original_text)
+            conn.client_abort = False
+
+            # 构造 function_calls 格式传给 handle_llm_function_call
+            # 注意：arguments 必须保持 dict，handle_llm_function_call 会 **arguments 展开
+            call_list = []
+            for fc in valid_calls:
+                args = fc.get("arguments", {})
+                if isinstance(args, str):
+                    args = json.loads(args) if args else {}
+                call_list.append({"name": fc["name"], "arguments": args})
+
+            function_call_data = {"function_calls": call_list}
+
+            def process_multiple_calls():
+                conn.dialogue.put(Message(role="user", content=original_text))
+                tool_call_timeout = int(conn.config.get("tool_call_timeout", 30))
+                try:
+                    result = asyncio.run_coroutine_threadsafe(
+                        conn.func_handler.handle_llm_function_call(conn, function_call_data),
+                        conn.loop,
+                    ).result(timeout=tool_call_timeout)
+                except Exception as e:
+                    conn.logger.bind(tag=TAG).error(f"批量工具调用失败: {e}")
+                    result = ActionResponse(
+                        action=Action.ERROR, result="工具调用超时", response="工具调用超时，请一会再试下哈"
+                    )
+
+                if result:
+                    if result.action == Action.RESPONSE:
+                        text = result.response
+                        if text is not None:
+                            speak_txt(conn, text)
+                    elif result.action in (Action.NOTFOUND, Action.ERROR):
+                        text = result.response if result.response else result.result
+                        if text is not None:
+                            speak_txt(conn, text)
+                    else:
+                        text = result.response if result.response else result.result
+                        if text is not None:
+                            speak_txt(conn, text)
+
+            conn.executor.submit(process_multiple_calls)
+            return True
+
         return False
     except json.JSONDecodeError as e:
         conn.logger.bind(tag=TAG).error(f"处理意图结果时出错: {e}")

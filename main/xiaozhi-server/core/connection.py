@@ -59,16 +59,20 @@ DIRECT_ANSWER_TOOL = {
     "type": "function",
     "function": {
         "name": "direct_answer",
-        "description": "当用户的请求不匹配其他任何工具时，可用此选项直接回复。将回复内容写在response参数里。",
+        "description": "当用户的请求不匹配其他任何工具时，可用此选项直接回复。response 里只写纯文本回复，emotion 单独填在 emotion 字段。",
         "parameters": {
             "type": "object",
             "properties": {
                 "response": {
                     "type": "string",
-                    "description": "你回复用户的完整内容",
+                    "description": "你回复用户的纯文本内容，不要包含任何 emotion 标记",
+                },
+                "emotion": {
+                    "type": "string",
+                    "description": "本次回复对应的表情动作，从系统提示词的 emotion 列表中选择",
                 },
             },
-            "required": ["response"],
+            "required": ["response", "emotion"],
         },
     },
 }
@@ -570,14 +574,14 @@ class ConnectionHandler:
         # === few-shot 示例（is_temporary）===
         # 展示 direct_answer 携带 response 参数的用法，一次调用完成回复
 
-        # 示例1：direct_answer（回复内容写在 response 参数里，无需递归）
+        # 示例1：direct_answer（response 传纯文本，emotion 单独传）
         da_tc_id = "fewshot_da_001"
         self.dialogue.put(Message(role="user", content="给我讲个故事吧", is_temporary=True))
         self.dialogue.put(Message(
             role="assistant",
             tool_calls=[{
                 "id": da_tc_id,
-                "function": {"arguments": '{"response": "好呀，你想听什么类型的呀？童话、冒险还是搞笑的？选一个我给你开讲~"}', "name": "direct_answer"},
+                "function": {"arguments": '{"response": "好呀，你想听什么类型的呀？童话、冒险还是搞笑的？选一个我给你开讲~", "emotion": "happy"}', "name": "direct_answer"},
                 "type": "function", "index": 0,
             }],
             is_temporary=True,
@@ -964,7 +968,11 @@ class ConnectionHandler:
         if depth == 0:
             current_sentence_id = str(uuid.uuid4().hex)
             self.sentence_id = current_sentence_id  # 更新共享属性
-            self.dialogue.put(Message(role="user", content=query))
+            # 如有说话人信息，在消息前加上前缀，让 LLM 知道是谁在说话
+            user_content = query
+            if getattr(self, "current_speaker", None):
+                user_content = f"[{self.current_speaker}] {query}"
+            self.dialogue.put(Message(role="user", content=user_content))
             self.tts.tts_text_queue.put(
                 TTSMessageDTO(
                     sentence_id=current_sentence_id,
@@ -1051,6 +1059,16 @@ class ConnectionHandler:
                     break
                 if self.intent_type == "function_call" and functions is not None:
                     content, tools_call = response
+                    # 流式检测 emotion 标记 [[emotion:xxx]]，实时下发表情/动作
+                    if content is not None and not tool_call_flag:
+                        clean_text, emotions = self._extract_emotion_tags(content)
+                        for emotion in emotions:
+                            if (self.features or {}).get("emoji", True):
+                                asyncio.run_coroutine_threadsafe(
+                                    textUtils.send_emotion_direct(self, emotion),
+                                    self.loop,
+                                )
+                        content = clean_text
                     if content is not None and len(content) > 0:
                         content_arguments += content
 
@@ -1067,7 +1085,13 @@ class ConnectionHandler:
                     _DA_STREAM_BUFFER = 5
                     for tc in tool_calls_list:
                         if tc["name"] == "direct_answer" and tc.get("arguments"):
-                            da_text = self._extract_direct_answer_response(tc["arguments"])
+                            da_text, da_emotion = self._extract_direct_answer_response(tc["arguments"])
+                            # 如有 emotion，实时发给数字人
+                            if da_emotion and (self.features or {}).get("emoji", True):
+                                asyncio.run_coroutine_threadsafe(
+                                    textUtils.send_emotion_direct(self, da_emotion),
+                                    self.loop,
+                                )
                             sent_len = tc.get("_da_sent", 0)
                             if da_text and len(da_text) > sent_len:
                                 safe_end = max(sent_len, len(da_text) - _DA_STREAM_BUFFER)
@@ -1178,7 +1202,7 @@ class ConnectionHandler:
                         f"模型选择 direct_answer，流式已播报，写入对话历史"
                     )
                     for tc in direct_answer_calls:
-                        da_response = self._extract_direct_answer_response(tc.get("arguments", "{}"))
+                        da_response, da_emotion = self._extract_direct_answer_response(tc.get("arguments", "{}"))
                         if da_response:
                             # 刷新流式缓冲区中未发送的部分
                             sent_len = tc.get("_da_sent", 0)
@@ -1198,6 +1222,9 @@ class ConnectionHandler:
                             da_response = self._clean_response_garbage(da_response)
                             self.tts.store_tts_text(current_sentence_id, da_response)
                             self.dialogue.put(Message(role="assistant", content=da_response))
+                        # emotion 已经由流式阶段发送，这里记录日志即可
+                        if da_emotion:
+                            self.logger.bind(tag=TAG).debug(f"direct_answer emotion: {da_emotion}")
 
                     if not real_tool_calls:
                         if depth == 0:
@@ -1642,38 +1669,42 @@ class ConnectionHandler:
 
     @staticmethod
     def _extract_direct_answer_response(arguments_str):
-        """从 direct_answer 的参数中提取 response 值。
+        """从 direct_answer 的参数中提取 response 和 emotion 值。
         优先使用 json.loads 标准解析，流式阶段 fallback 到字符串提取。
+        返回 (response, emotion) 元组。
         """
         if not arguments_str:
-            return ""
-        # 优先尝试标准 JSON 解析（适用于完整且格式正确的 JSON）
+            return "", ""
+        # 优先尝试标准 JSON 解析
         try:
             data = json.loads(arguments_str)
-            if isinstance(data, dict) and "response" in data:
-                return data["response"]
+            if isinstance(data, dict):
+                return data.get("response", ""), data.get("emotion", "")
         except (json.JSONDecodeError, TypeError):
             pass
         # Fallback：流式阶段 JSON 可能不完整，使用字符串提取
-        marker = '"response": "'
-        idx = arguments_str.find(marker)
-        if idx < 0:
-            marker = '"response":"'
-            idx = arguments_str.find(marker)
-        if idx < 0:
+        def _extract_field(field):
+            for marker in (f'"{field}": "', f'"{field}":"'):
+                idx = arguments_str.find(marker)
+                if idx >= 0:
+                    start = idx + len(marker)
+                    raw = arguments_str[start:]
+                    # 找下一个引号作为结束（简单 heuristic）
+                    end = raw.find('",')
+                    if end < 0:
+                        end = raw.find('"}')
+                    if end < 0:
+                        end = len(raw)
+                        if raw.endswith('"'):
+                            end -= 1
+                    raw = raw[:end]
+                    raw = raw.replace('\\"', '"').replace('\\n', '\n').replace('\\\\', '\\')
+                    return raw
             return ""
-        start = idx + len(marker)
-        raw = arguments_str[start:]
-        # 去掉末尾的 JSON 闭合符号（如果已完整）
-        if raw.endswith('"}'):
-            raw = raw[:-2]
-        elif raw.endswith('"'):
-            raw = raw[:-1]
-        # 处理 JSON 转义
-        raw = raw.replace('\\"', '"').replace('\\n', '\n').replace('\\\\', '\\')
-        return raw
+        return _extract_field("response"), _extract_field("emotion")
 
     _EMOTION_TAG_RE = re.compile(r'\[\[emotion:([a-zA-Z_]+)\]\]')
+    _EMOTION_TAG_RE_LOOSE = re.compile(r'(?:\[\[)?emotion:([a-zA-Z_]+)\]?\]?')
 
     def _extract_emotion_tags(self, text: str) -> tuple:
         """提取文本中的 [[emotion:xxx]] 标记，返回 (clean_text, emotions_list)。"""
@@ -1681,6 +1712,9 @@ class ConnectionHandler:
             return text, []
         emotions = [m.group(1) for m in self._EMOTION_TAG_RE.finditer(text)]
         clean_text = self._EMOTION_TAG_RE.sub('', text)
+        # 兜底：模型可能输出残缺的 emotion 标记（如缺少开头的 [[）
+        emotions.extend(m.group(1) for m in self._EMOTION_TAG_RE_LOOSE.finditer(clean_text))
+        clean_text = self._EMOTION_TAG_RE_LOOSE.sub('', clean_text)
         return clean_text, emotions
 
     @staticmethod

@@ -101,6 +101,9 @@ class ServerPluginExecutor(ToolExecutor):
                 if func_name == "switch_llm":
                     self._init_switch_llm_description(func_item)
 
+                if func_name in ("hass_get_state", "hass_set_state"):
+                    self._init_hass_entity_id_enum(func_item)
+
                 tools[func_name] = ToolDefinition(
                     name=func_name,
                     description=func_item.description,
@@ -165,5 +168,32 @@ class ServerPluginExecutor(ToolExecutor):
                 func_item.description["function"]["parameters"]["properties"]["model_name"][
                     "enum"
                 ] = enum_keys
+        except Exception:
+            pass
+
+    def _init_hass_entity_id_enum(self, func_item):
+        """从 home_assistant 配置中提取 entity_id 列表，注入到 entity_id 参数的 enum 中，防止模型瞎猜。"""
+        try:
+            plugins = self.config.get("plugins", {})
+            ha_cfg = plugins.get("home_assistant") or plugins.get("hass_get_state")
+            if not ha_cfg:
+                return
+            devices = ha_cfg.get("devices", [])
+            if not devices:
+                return
+            entity_ids = []
+            for device in devices:
+                parts = str(device).split(",")
+                if len(parts) >= 3:
+                    entity_ids.append(parts[2].strip())
+            if not entity_ids:
+                return
+            # 注入 enum
+            params = func_item.description["function"]["parameters"]["properties"]
+            if "entity_id" in params:
+                params["entity_id"]["enum"] = entity_ids
+                params["entity_id"][
+                    "description"
+                ] += f"\n只能从以下列表中选择，禁止自创：{', '.join(entity_ids)}"
         except Exception:
             pass

@@ -232,6 +232,7 @@ class LLMProvider(LLMProviderBase):
             "messages": dialogue,
             "stream": True,
             "tools": functions,
+            "tool_choice": "auto",
             "user": "xiaozhi-fixed-session",
         }
 
@@ -251,12 +252,32 @@ class LLMProvider(LLMProviderBase):
 
         stream = self.client.chat.completions.create(**request_params)
 
+        is_active = True
+        chunk_count = 0
+        has_yield = False
         try:
             for chunk in stream:
+                chunk_count += 1
                 if getattr(chunk, "choices", None):
                     delta = chunk.choices[0].delta
                     content = getattr(delta, "content", "")
                     tool_calls = getattr(delta, "tool_calls", None)
+                    # 过滤 <think> 思考标签（与 response 保持一致）
+                    if content:
+                        if "<think>" in content:
+                            is_active = False
+                            content = content.split("<think>")[0]
+                        if "</think>" in content:
+                            is_active = True
+                            content = content.split("</think>")[-1]
+                        if not is_active:
+                            content = ""
+                    if content or tool_calls:
+                        has_yield = True
+                        if chunk_count <= 3:
+                            logger.bind(tag=TAG).debug(
+                                f"fc_chunk#{chunk_count} content={content!r} tool_calls={tool_calls is not None}"
+                            )
                     yield content, tool_calls
                 elif isinstance(getattr(chunk, "usage", None), CompletionUsage):
                     usage_info = getattr(chunk, "usage", None)
@@ -265,5 +286,9 @@ class LLMProvider(LLMProviderBase):
                         f"输出 {getattr(usage_info, 'completion_tokens', '未知')}，"
                         f"共计 {getattr(usage_info, 'total_tokens', '未知')}"
                     )
+            if not has_yield:
+                logger.bind(tag=TAG).warning(
+                    f"function_call 未收到任何有效内容，chunks={chunk_count}, tools_count={len(functions) if functions else 0}"
+                )
         finally:
             stream.close()

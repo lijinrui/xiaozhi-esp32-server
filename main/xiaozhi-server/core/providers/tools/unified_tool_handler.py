@@ -192,14 +192,18 @@ class UnifiedToolHandler:
             if response.action == Action.ERROR:
                 return response
 
-        # 合并所有成功的响应
+        # 合并所有成功的响应（去重，避免同类操作重复播报）
         contents = []
         responses_text = []
+        seen_contents = set()
+        seen_responses = set()
 
         for response in responses:
-            if response.content:
-                contents.append(response.content)
-            if response.response:
+            if response.result and response.result not in seen_contents:
+                seen_contents.add(response.result)
+                contents.append(response.result)
+            if response.response and response.response not in seen_responses:
+                seen_responses.add(response.response)
                 responses_text.append(response.response)
 
         # 确定最终的动作类型
