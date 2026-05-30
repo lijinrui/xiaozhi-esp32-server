@@ -133,10 +133,11 @@ def close_recording_session(conn: "ConnectionHandler", reason: str = "manual") -
 @register_function("enter_recording_mode", enter_recording_mode_desc, ToolType.SYSTEM_CTL)
 def enter_recording_mode(conn: "ConnectionHandler", reason: str | None = None):
     if getattr(conn, "recording_session", None):
+        # 已经在录音模式：静默处理，不触发 TTS
         return ActionResponse(
-            action=Action.RESPONSE,
+            action=Action.NOTFOUND,
             result="录音模式已在进行中",
-            response="已经在录音模式啦。",
+            response=None,
         )
     try:
         conn.recording_session = _open_session(conn, reason)
