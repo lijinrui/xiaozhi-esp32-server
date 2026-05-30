@@ -107,7 +107,7 @@ class AudioRateController:
                     await message_callback()
                 except Exception as e:
                     self.logger.bind(tag=TAG).error(f"发送消息失败: {e}")
-                    raise
+                    # 单条消息失败不中断队列，继续发送后续音频
 
             elif item_type == "audio":
                 if self.start_timestamp is None:
@@ -143,7 +143,7 @@ class AudioRateController:
                     await send_audio_callback(opus_packet)
                 except Exception as e:
                     self.logger.bind(tag=TAG).error(f"发送音频失败: {e}")
-                    raise
+                    # 单包发送失败不中断队列，继续发送后续音频
 
         # 队列处理完后清除事件
         self.queue_empty_event.set()
@@ -172,6 +172,10 @@ class AudioRateController:
                 self.logger.bind(tag=TAG).debug("音频发送循环已停止")
             except Exception as e:
                 self.logger.bind(tag=TAG).error(f"音频发送循环异常: {e}")
+            finally:
+                # 确保任何异常退出时，queue_empty_event 都被设置，防止 _wait_for_audio_completion 死锁
+                self.queue_empty_event.set()
+                self.queue_has_data_event.clear()
 
         self.pending_send_task = asyncio.create_task(_send_loop())
         return self.pending_send_task

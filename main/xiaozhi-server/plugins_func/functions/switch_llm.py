@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from difflib import SequenceMatcher
 from typing import TYPE_CHECKING
 
@@ -12,6 +14,30 @@ if TYPE_CHECKING:
 
 TAG = __name__
 logger = setup_logging()
+
+# 模块加载时检测 pypinyin 可用性，缺失则给出明确安装提示
+try:
+    from pypinyin import lazy_pinyin
+
+    _PINYIN_AVAILABLE = True
+except Exception:
+    _PINYIN_AVAILABLE = False
+    logger.bind(tag=TAG).warning(
+        "pypinyin 未安装，switch_llm 的拼音同音字匹配将不可用。"
+        "请执行: pip install pypinyin==0.53.0"
+    )
+
+
+def _to_pinyin(text: str) -> str:
+    """将中文文本转为无分隔符的拼音小写字符串，用于处理同音字 ASR 误识别。
+    未安装 pypinyin 或转换失败时返回原字符串。
+    """
+    if not _PINYIN_AVAILABLE:
+        return text
+    try:
+        return "".join(lazy_pinyin(text))
+    except Exception:
+        return text
 
 
 switch_llm_function_desc = {
@@ -87,7 +113,9 @@ def _filter_llm_config(llm_config: dict, allowed_keys: set | None) -> dict:
 
 
 def _build_alias_entries(llm_config: dict) -> list:
-    """[(normalized_alias, raw_alias, module_key)]；module key、model_name 和 aliases 都纳入匹配。"""
+    """[(normalized_alias, raw_alias, module_key)]；module key、model_name 和 aliases 都纳入匹配。
+    如果候选词包含中文，会额外生成一条拼音 normalized 的 entry，用于处理同音字 ASR 误识别。
+    """
     entries = []
     for module_key, block in llm_config.items():
         if not isinstance(block, dict):
@@ -98,7 +126,41 @@ def _build_alias_entries(llm_config: dict) -> list:
             norm = _normalize(cand)
             if norm:
                 entries.append((norm, str(cand), module_key))
+                pinyin = _to_pinyin(norm)
+                if pinyin != norm:
+                    entries.append((pinyin, str(cand), module_key))
     return entries
+
+
+def _try_match(query: str, entries: list) -> str | None:
+    """在 entries 中尝试匹配 query，返回 module_key 或 None。"""
+    # 1. 精确匹配：配置 key / model_name / aliases。
+    exact_keys = sorted({mk for norm, raw, mk in entries if query == norm})
+    if len(exact_keys) == 1:
+        return exact_keys[0]
+    if len(exact_keys) > 1:
+        return None
+
+    # 2. 包含匹配：支持“切到海螺模型”“用千问30b”等自然说法。
+    candidates = [
+        (len(norm), raw, mk)
+        for norm, raw, mk in entries
+        if len(norm) >= 2 and (norm in query or query in norm)
+    ]
+    if candidates:
+        return max(candidates)[2]
+
+    # 3. 轻量模糊匹配：兜底处理少量 ASR 误识别或中英混写。
+    scored = [
+        (SequenceMatcher(None, query, norm).ratio(), len(norm), raw, mk)
+        for norm, raw, mk in entries
+        if len(norm) >= 3
+    ]
+    scored = [x for x in scored if x[0] >= 0.72]
+    if scored:
+        return max(scored)[3]
+
+    return None
 
 
 def _match_model_name(model_name: str, llm_config: dict, preferred_keys: set | None = None):
@@ -114,37 +176,17 @@ def _match_model_name(model_name: str, llm_config: dict, preferred_keys: set | N
 
     entries = _build_alias_entries(llm_config)
 
-    # 1. 精确匹配：配置 key / model_name / aliases。
-    exact_matches = []
-    for norm, raw, module_key in entries:
-        if query == norm:
-            exact_matches.append((raw, module_key))
-    exact_keys = sorted({module_key for _, module_key in exact_matches})
-    if len(exact_keys) == 1:
-        return exact_keys[0]
-    if len(exact_keys) > 1:
-        return None
+    # 先用原始文本匹配（汉字、英文、数字等）
+    result = _try_match(query, entries)
+    if result:
+        return result
 
-    # 2. 包含匹配：支持“切到海螺模型”“用千问30b”等自然说法。
-    candidates = []
-    for norm, raw, module_key in entries:
-        if len(norm) >= 2 and (norm in query or query in norm):
-            candidates.append((len(norm), raw, module_key))
-    if candidates:
-        candidates.sort(reverse=True)
-        return candidates[0][2]
-
-    # 3. 轻量模糊匹配：兜底处理少量 ASR 误识别或中英混写。
-    scored = []
-    for norm, raw, module_key in entries:
-        if len(norm) < 3:
-            continue
-        score = SequenceMatcher(None, query, norm).ratio()
-        if score >= 0.72:
-            scored.append((score, len(norm), raw, module_key))
-    if scored:
-        scored.sort(reverse=True)
-        return scored[0][3]
+    # 拼音兜底：处理同音字 ASR 误识别，如“延周”-> yanzhou 匹配 alias “砚舟”
+    query_pinyin = _to_pinyin(query)
+    if query_pinyin and query_pinyin != query:
+        result = _try_match(query_pinyin, entries)
+        if result:
+            return result
 
     return None
 

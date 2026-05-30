@@ -82,7 +82,7 @@ def is_punctuation_or_emoji(char):
 
 
 async def get_emotion(conn: "ConnectionHandler", text):
-    """获取文本内的情绪消息"""
+    """获取文本内的情绪消息（从 emoji 字符映射）"""
     emoji = "🙂"
     emotion = "happy"
     for char in text:
@@ -96,6 +96,24 @@ async def get_emotion(conn: "ConnectionHandler", text):
                 {
                     "type": "llm",
                     "text": emoji,
+                    "emotion": emotion,
+                    "session_id": conn.session_id,
+                }
+            )
+        )
+    except Exception as e:
+        conn.logger.bind(tag=TAG).warning(f"发送情绪表情失败，错误:{e}")
+    return
+
+
+async def send_emotion_direct(conn: "ConnectionHandler", emotion: str, text: str = ""):
+    """直接向客户端发送 emotion 字符串（用于 JSON 格式响应，如 dance/nod_happy 等）"""
+    try:
+        await conn.websocket.send(
+            json.dumps(
+                {
+                    "type": "llm",
+                    "text": text,
                     "emotion": emotion,
                     "session_id": conn.session_id,
                 }

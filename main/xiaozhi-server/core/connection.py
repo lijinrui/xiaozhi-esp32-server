@@ -1087,6 +1087,16 @@ class ConnectionHandler:
                                         )
                 else:
                     content = response
+                    # 流式检测 emotion 标记 [[emotion:xxx]]，实时下发表情/动作
+                    if content is not None and not tool_call_flag:
+                        clean_text, emotions = self._extract_emotion_tags(content)
+                        for emotion in emotions:
+                            if (self.features or {}).get("emoji", True):
+                                asyncio.run_coroutine_threadsafe(
+                                    textUtils.send_emotion_direct(self, emotion),
+                                    self.loop,
+                                )
+                        content = clean_text
 
                 # 在llm回复中获取情绪表情，一轮对话只在开头获取一次
                 if emotion_flag and content is not None and content.strip():
@@ -1108,6 +1118,7 @@ class ConnectionHandler:
                                 content_detail=content,
                             )
                         )
+
         except Exception as e:
             self.logger.bind(tag=TAG).error(f"LLM stream processing error: {e}")
             self.tts.tts_text_queue.put(
@@ -1661,6 +1672,16 @@ class ConnectionHandler:
         # 处理 JSON 转义
         raw = raw.replace('\\"', '"').replace('\\n', '\n').replace('\\\\', '\\')
         return raw
+
+    _EMOTION_TAG_RE = re.compile(r'\[\[emotion:([a-zA-Z_]+)\]\]')
+
+    def _extract_emotion_tags(self, text: str) -> tuple:
+        """提取文本中的 [[emotion:xxx]] 标记，返回 (clean_text, emotions_list)。"""
+        if not text:
+            return text, []
+        emotions = [m.group(1) for m in self._EMOTION_TAG_RE.finditer(text)]
+        clean_text = self._EMOTION_TAG_RE.sub('', text)
+        return clean_text, emotions
 
     @staticmethod
     def _clean_response_garbage(text):

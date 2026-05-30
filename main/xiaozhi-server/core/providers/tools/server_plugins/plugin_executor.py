@@ -131,16 +131,39 @@ class ServerPluginExecutor(ToolExecutor):
             pass
 
     def _init_switch_llm_description(self, func_item):
-        """根据当前 LLM 配置补充可切换模型和别名，降低意图识别传错模型名的概率。"""
+        """根据当前 LLM 配置补充可切换模型和别名，让 LLM 直接从配置 key 中选择最接近的。"""
         try:
-            from plugins_func.functions.switch_llm import get_switch_llm_model_options
+            from plugins_func.functions.switch_llm import (
+                get_switch_llm_model_options,
+                _get_custom_llm_keys,
+                _filter_llm_config,
+            )
 
-            options = get_switch_llm_model_options(self.config.get("LLM", {}) or {})
-            func_item.description["function"][
-                "description"
-            ] += f"\n当前可切换模型及别名：{options}"
+            llm_config = self.config.get("LLM", {}) or {}
+            custom_keys = _get_custom_llm_keys()
+            if custom_keys:
+                llm_config = _filter_llm_config(llm_config, custom_keys)
+
+            options = get_switch_llm_model_options(llm_config)
+            enum_keys = [k for k, v in llm_config.items() if isinstance(v, dict)]
+
+            choice_instruction = (
+                f"\n\n【重要】用户说的模型名可能是语音识别（ASR）的同音字误识别。"
+                f"你必须从以下列表中选择语义或发音最接近用户说法的配置 key 返回，"
+                f"不要原样返回用户口述的不在列表中的名称。"
+                f"例如用户说'延周'应匹配'OpenClawLLM'，用户说'海罗'应匹配'MiniMaxLLM'。\n"
+                f"可选模型及别名：{options}"
+            )
+
+            func_item.description["function"]["description"] += choice_instruction
             func_item.description["function"]["parameters"]["properties"]["model_name"][
                 "description"
-            ] += f" 当前可选：{options}"
-        except (KeyError, TypeError, ImportError):
+            ] += choice_instruction
+
+            # 加 enum 硬约束，强制 LLM 只能从配置 key 里选（主流 function calling 均支持）
+            if enum_keys:
+                func_item.description["function"]["parameters"]["properties"]["model_name"][
+                    "enum"
+                ] = enum_keys
+        except Exception:
             pass

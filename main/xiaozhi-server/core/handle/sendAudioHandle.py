@@ -65,7 +65,10 @@ async def _wait_for_audio_completion(conn: "ConnectionHandler"):
         conn.logger.bind(tag=TAG).debug(
             f"等待音频发送完成，队列中还有 {len(rate_controller.queue)} 个包"
         )
-        await rate_controller.queue_empty_event.wait()
+        try:
+            await asyncio.wait_for(rate_controller.queue_empty_event.wait(), timeout=15.0)
+        except asyncio.TimeoutError:
+            conn.logger.bind(tag=TAG).warning("等待音频发送完成超时，强制继续")
 
         # 等待预缓冲包播放完成
         # 前N个包直接发送，增加2个网络抖动包，需要额外等待它们在客户端播放完成

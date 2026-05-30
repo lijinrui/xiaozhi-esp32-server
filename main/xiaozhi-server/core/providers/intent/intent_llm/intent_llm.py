@@ -55,6 +55,10 @@ class IntentProvider(IntentProviderBase):
                     param_desc = param_info.get("description", "")
                     param_type = param_info.get("type", "")
                     functions_desc += f"- {param_name} ({param_type}): {param_desc}\n"
+                    # 把 enum 可选值也显式写进 prompt，小模型也能看懂
+                    enum_values = param_info.get("enum")
+                    if enum_values:
+                        functions_desc += f"  只能从以下值中选择: {', '.join(str(v) for v in enum_values)}\n"
 
             functions_desc += "---\n"
 
