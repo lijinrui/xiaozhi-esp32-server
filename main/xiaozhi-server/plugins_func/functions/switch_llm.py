@@ -1,7 +1,9 @@
+from difflib import SequenceMatcher
 from typing import TYPE_CHECKING
 
 from plugins_func.register import register_function, ToolType, ActionResponse, Action
 from config.logger import setup_logging
+from config.config_loader import get_project_dir, read_config
 from core.utils import llm as llm_utils
 from core.utils.dialogue import Message
 
@@ -41,7 +43,19 @@ switch_llm_function_desc = {
 
 
 def _normalize(name: str) -> str:
-    return "".join(name.split()).lower()
+    text = "".join(str(name).split()).lower()
+    replacements = {
+        "模型": "",
+        "大模型": "",
+        "llm": "",
+        "三十": "30",
+        "三": "3",
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    for char in "-_/.:@":
+        text = text.replace(char, "")
+    return text
 
 
 def _split_aliases(raw) -> list:
@@ -55,19 +69,105 @@ def _split_aliases(raw) -> list:
     return []
 
 
-def _build_alias_index(llm_config: dict) -> dict:
-    """{normalized_alias: module_key}；module key 自身与各 alias 都纳入索引。"""
-    index = {}
+def _get_custom_llm_keys() -> set:
+    try:
+        custom_config = read_config(get_project_dir() + "data/.config.yaml")
+    except Exception:
+        return set()
+    llm_config = custom_config.get("LLM", {}) if isinstance(custom_config, dict) else {}
+    if not isinstance(llm_config, dict):
+        return set()
+    return {key for key, value in llm_config.items() if isinstance(value, dict)}
+
+
+def _filter_llm_config(llm_config: dict, allowed_keys: set | None) -> dict:
+    if not allowed_keys:
+        return llm_config
+    return {key: value for key, value in llm_config.items() if key in allowed_keys}
+
+
+def _build_alias_entries(llm_config: dict) -> list:
+    """[(normalized_alias, raw_alias, module_key)]；module key、model_name 和 aliases 都纳入匹配。"""
+    entries = []
     for module_key, block in llm_config.items():
         if not isinstance(block, dict):
             continue
-        candidates = [module_key]
+        candidates = [module_key, block.get("model_name", "")]
         candidates.extend(_split_aliases(block.get("aliases")))
         for cand in candidates:
             norm = _normalize(cand)
-            if norm and norm not in index:
-                index[norm] = module_key
-    return index
+            if norm:
+                entries.append((norm, str(cand), module_key))
+    return entries
+
+
+def _match_model_name(model_name: str, llm_config: dict, preferred_keys: set | None = None):
+    query = _normalize(model_name)
+    if not query:
+        return None
+
+    if preferred_keys:
+        preferred_config = _filter_llm_config(llm_config, preferred_keys)
+        preferred_match = _match_model_name(model_name, preferred_config, None)
+        if preferred_match:
+            return preferred_match
+
+    entries = _build_alias_entries(llm_config)
+
+    # 1. 精确匹配：配置 key / model_name / aliases。
+    exact_matches = []
+    for norm, raw, module_key in entries:
+        if query == norm:
+            exact_matches.append((raw, module_key))
+    exact_keys = sorted({module_key for _, module_key in exact_matches})
+    if len(exact_keys) == 1:
+        return exact_keys[0]
+    if len(exact_keys) > 1:
+        return None
+
+    # 2. 包含匹配：支持“切到海螺模型”“用千问30b”等自然说法。
+    candidates = []
+    for norm, raw, module_key in entries:
+        if len(norm) >= 2 and (norm in query or query in norm):
+            candidates.append((len(norm), raw, module_key))
+    if candidates:
+        candidates.sort(reverse=True)
+        return candidates[0][2]
+
+    # 3. 轻量模糊匹配：兜底处理少量 ASR 误识别或中英混写。
+    scored = []
+    for norm, raw, module_key in entries:
+        if len(norm) < 3:
+            continue
+        score = SequenceMatcher(None, query, norm).ratio()
+        if score >= 0.72:
+            scored.append((score, len(norm), raw, module_key))
+    if scored:
+        scored.sort(reverse=True)
+        return scored[0][3]
+
+    return None
+
+
+def get_switch_llm_model_options(llm_config: dict) -> str:
+    custom_keys = _get_custom_llm_keys()
+    if custom_keys:
+        llm_config = _filter_llm_config(llm_config, custom_keys)
+
+    options = []
+    for module_key, block in llm_config.items():
+        if not isinstance(block, dict):
+            continue
+        aliases = _split_aliases(block.get("aliases"))
+        model_name = block.get("model_name")
+        labels = aliases[:]
+        if model_name:
+            labels.append(str(model_name))
+        if labels:
+            options.append(f"{module_key}({', '.join(labels)})")
+        else:
+            options.append(module_key)
+    return "；".join(options)
 
 
 @register_function("switch_llm", switch_llm_function_desc, ToolType.SYSTEM_CTL)
@@ -80,14 +180,14 @@ def switch_llm(conn: "ConnectionHandler", model_name: str):
         )
 
     llm_config = conn.config.get("LLM", {}) or {}
-    alias_index = _build_alias_index(llm_config)
-    target_key = alias_index.get(_normalize(model_name))
+    target_key = _match_model_name(model_name, llm_config, _get_custom_llm_keys())
 
     if not target_key:
+        options = get_switch_llm_model_options(llm_config)
         return ActionResponse(
             action=Action.RESPONSE,
             result=f"未找到模型 {model_name}",
-            response=f"没找到 {model_name} 这个模型哦。",
+            response=f"没找到 {model_name} 这个模型哦。可切换的是：{options}",
         )
 
     current_key = conn.config.get("selected_module", {}).get("LLM")

@@ -98,6 +98,9 @@ class ServerPluginExecutor(ToolExecutor):
                 if func_name == "get_news_from_newsnow":
                     self._init_news_source_description(func_item, func_name)
 
+                if func_name == "switch_llm":
+                    self._init_switch_llm_description(func_item)
+
                 tools[func_name] = ToolDefinition(
                     name=func_name,
                     description=func_item.description,
@@ -125,4 +128,19 @@ class ServerPluginExecutor(ToolExecutor):
                 "description"
             ] = f"新闻源的标准中文名称，例如{sources_str}等。可选参数，如果不提供则使用默认新闻源"
         except (KeyError, TypeError):
+            pass
+
+    def _init_switch_llm_description(self, func_item):
+        """根据当前 LLM 配置补充可切换模型和别名，降低意图识别传错模型名的概率。"""
+        try:
+            from plugins_func.functions.switch_llm import get_switch_llm_model_options
+
+            options = get_switch_llm_model_options(self.config.get("LLM", {}) or {})
+            func_item.description["function"][
+                "description"
+            ] += f"\n当前可切换模型及别名：{options}"
+            func_item.description["function"]["parameters"]["properties"]["model_name"][
+                "description"
+            ] += f" 当前可选：{options}"
+        except (KeyError, TypeError, ImportError):
             pass
