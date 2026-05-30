@@ -106,6 +106,13 @@ async def process_intent_result(
             if function_name == "continue_chat":
                 return False
 
+            # 录音模式：只允许 exit_recording_mode，其他一律跳过
+            if getattr(conn, "recording_session", None) and function_name != "exit_recording_mode":
+                conn.logger.bind(tag=TAG).info(
+                    f"录音模式忽略非退出意图: {function_name}"
+                )
+                return False
+
             if function_name == "result_for_context":
                 await send_stt_message(conn, original_text)
                 conn.client_abort = False
@@ -131,6 +138,12 @@ async def process_intent_result(
 
                 conn.executor.submit(process_context_result)
                 return True
+
+            if not conn.func_handler.has_tool(function_name):
+                conn.logger.bind(tag=TAG).warning(
+                    f"忽略未启用的意图函数: {function_name}，转为普通对话"
+                )
+                return False
 
             function_args = {}
             if "arguments" in intent_data["function_call"]:

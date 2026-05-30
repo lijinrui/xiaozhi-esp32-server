@@ -101,6 +101,7 @@ def setup_logging():
             format=log_format,
             level=log_level,
             filter=formatter,
+            colorize=True,
             catch=True,
         )
 

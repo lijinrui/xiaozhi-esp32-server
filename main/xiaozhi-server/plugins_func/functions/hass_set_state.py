@@ -58,15 +58,38 @@ def hass_set_state(conn: "ConnectionHandler", entity_id="", state=None):
     if state is None:
         state = {}
     try:
+        state = _normalize_hass_state(state)
         ha_response = handle_hass_set_state(conn, entity_id, state)
         return ActionResponse(Action.REQLLM, ha_response, None)
     except asyncio.TimeoutError:
         logger.bind(tag=TAG).error("设置Home Assistant状态超时")
         return ActionResponse(Action.ERROR, "请求超时", None)
     except Exception as e:
-        error_msg = f"执行Home Assistant操作失败"
+        error_msg = f"执行Home Assistant操作失败: {e}"
         logger.bind(tag=TAG).error(error_msg)
         return ActionResponse(Action.ERROR, error_msg, None)
+
+
+def _normalize_hass_state(state):
+    if isinstance(state, str):
+        state = {"type": state}
+    if not isinstance(state, dict):
+        return {}
+
+    action = state.get("type") or state.get("action") or state.get("state")
+    action_aliases = {
+        "on": "turn_on",
+        "off": "turn_off",
+        "open": "turn_on",
+        "close": "turn_off",
+        "打开": "turn_on",
+        "关闭": "turn_off",
+        "开": "turn_on",
+        "关": "turn_off",
+    }
+    if action:
+        state["type"] = action_aliases.get(str(action).lower(), action)
+    return state
 
 
 def handle_hass_set_state(conn: "ConnectionHandler", entity_id, state):
@@ -84,6 +107,8 @@ def handle_hass_set_state(conn: "ConnectionHandler", entity_id, state):
     action = ""
     arg = ""
     value = ""
+    if "type" not in state:
+        return "执行失败，缺少操作类型"
     if state["type"] == "turn_on":
         description = "设备已打开"
         if domain == "cover":
