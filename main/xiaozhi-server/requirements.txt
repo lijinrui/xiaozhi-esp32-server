@@ -43,3 +43,5 @@ Jinja2==3.1.6
 vosk==0.3.45
 websocket-client>=1.0.0
 pypinyin==0.53.0
+# Qwen3-ASR 本地模型（MLX 版本，仅 Apple Silicon Mac）
+mlx-qwen3-asr>=0.3.5

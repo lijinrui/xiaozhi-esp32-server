@@ -233,6 +233,7 @@ selected_module:
   # 语音活动检测模块，默认使用SileroVAD模型
   VAD: SileroVAD
   # 语音识别模块，默认使用FunASR本地模型
+  # 可选: FunASR / FunASRServer / Qwen3ASRFlash / Qwen3ASRLocal / ...
   ASR: FunASR
   # 将根据配置名称对应的type调用实际的LLM适配器
   LLM: ChatGLMLLM
@@ -588,6 +589,15 @@ ASR:
     enable_itn: true  # 逆文本归一化
     #language: "zh"  # 语种，支持zh、en、ja、ko等
     context: ""  # 上下文信息，用于提高识别准确率，不超过10000 Token
+  Qwen3ASRLocal:
+    # Qwen3-ASR 本地模型（MLX 版本），适用于 Apple Silicon Mac
+    # 模型下载地址：https://huggingface.co/mlx-community/Qwen3-ASR-1.7B-8bit
+    # 需要安装 Python 依赖: pip install mlx-qwen3-asr
+    # 模型路径指向本地 safetensors 目录
+    type: qwen3_asr_local
+    model_path: /Users/lijinrui/.lmstudio/models/mlx-community/Qwen3-ASR-1.7B-8bit
+    output_dir: tmp/
+    # language: Chinese  # 可选：指定语种，如 Chinese / English，不填则自动检测
   XunfeiStreamASR:
     # 讯飞流式语音识别服务
     # 需要先在讯飞开放平台创建应用，获取以下认证信息
