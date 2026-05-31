@@ -26,10 +26,13 @@ async def sendAudioMessage(conn: "ConnectionHandler", sentenceType, audios, text
         conn.logger.bind(tag=TAG).info(f"发送第一段语音: {text}")
         conn.tts.tts_audio_first_sentence = False
 
-    if sentenceType == SentenceType.FIRST:
+    if sentenceType in (SentenceType.FIRST, SentenceType.MIDDLE) and audios:
         if not getattr(conn, "tts_start_sent", False):
             await send_tts_message(conn, "start")
             conn.tts_start_sent = True
+            await _send_tts_start_padding(conn)
+
+    if sentenceType == SentenceType.FIRST:
         # 同一句子的后续消息加入流控队列，其他情况立即发送
         if (
             hasattr(conn, "audio_rate_controller")
@@ -81,6 +84,19 @@ async def _wait_for_audio_completion(conn: "ConnectionHandler"):
         await asyncio.sleep(pre_buffer_playback_time)
 
         conn.logger.bind(tag=TAG).debug("音频发送完成")
+
+
+async def _send_tts_start_padding(conn: "ConnectionHandler"):
+    """发送少量静音帧，给设备播放器起播缓冲，避免吞掉首字。"""
+    selected_asr = conn.config.get("selected_module", {}).get("ASR")
+    asr_config = conn.config.get("ASR", {}).get(selected_asr, {})
+    padding_frames = int(asr_config.get("tts_start_padding_frames", 0) or 0)
+    if padding_frames <= 0:
+        return
+
+    silence = b"\xF8\xFF\xFE"
+    for _ in range(padding_frames):
+        await sendAudio(conn, silence)
 
 
 async def _send_to_mqtt_gateway(

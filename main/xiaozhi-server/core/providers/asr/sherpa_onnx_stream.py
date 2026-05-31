@@ -59,6 +59,7 @@ class ASRProvider(ASRProviderBase):
         self.early_llm_stable_seconds = float(
             config.get("early_llm_stable_seconds", 0.6)
         )
+        self.preroll_frames = int(config.get("preroll_frames", 10))
         # 运行时状态
         self.recognizer = None
         self.stream = None
@@ -178,6 +179,7 @@ class ASRProvider(ASRProviderBase):
                 self.forward_task = asyncio.create_task(
                     self._recognize_loop(conn)
                 )
+                await self._feed_preroll_audio(conn)
                 logger.bind(tag=TAG).debug("创建新的流式识别 stream")
             except Exception as e:
                 logger.bind(tag=TAG).error(f"创建识别 stream 失败: {e}")
@@ -311,6 +313,24 @@ class ASRProvider(ASRProviderBase):
         except Exception as e:
             logger.bind(tag=TAG).error(f"发送 tail padding 失败: {e}")
             self._is_stopping = False
+
+    async def _feed_preroll_audio(self, conn: "ConnectionHandler"):
+        """把VAD触发前缓存的少量音频喂给识别器，避免吞掉句首。"""
+        if not self.stream or not self.preroll_frames:
+            return
+
+        preroll_audio = conn.asr_audio[-self.preroll_frames - 1 : -1]
+        for cached_audio in preroll_audio:
+            try:
+                pcm = self.decoder_opus.decode(cached_audio, 960)
+                if pcm:
+                    samples = (
+                        np.frombuffer(pcm, dtype=np.int16).astype(np.float32)
+                        / 32768.0
+                    )
+                    self.stream.accept_waveform(16000, samples)
+            except Exception as e:
+                logger.bind(tag=TAG).debug(f"喂pre-roll音频失败: {e}")
 
     async def _send_interim_result(self, conn: "ConnectionHandler", text: str):
         """把流式中间结果推给前端显示，不触发 LLM/TTS。"""

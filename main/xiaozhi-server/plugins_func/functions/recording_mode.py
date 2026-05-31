@@ -17,6 +17,20 @@ logger = setup_logging()
 _SERVER_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 RECORDING_ROOT = os.path.join(_SERVER_ROOT, "data", "recordings")
 RECORDING_VAD_TIMEOUT_SECONDS = 1800
+RECORDING_ENTER_KEYWORDS = (
+    "录音",
+    "录像",
+    "录制",
+    "记录",
+    "会议记录",
+    "会议纪要",
+    "只听不说",
+    "只听",
+    "别说话",
+    "不要说话",
+    "常驻拾音",
+    "拾音器",
+)
 
 enter_recording_mode_desc = {
     "type": "function",
@@ -132,6 +146,17 @@ def close_recording_session(conn: "ConnectionHandler", reason: str = "manual") -
 
 @register_function("enter_recording_mode", enter_recording_mode_desc, ToolType.SYSTEM_CTL)
 def enter_recording_mode(conn: "ConnectionHandler", reason: str | None = None):
+    last_user_text = getattr(conn, "last_user_text", "") or ""
+    if not any(keyword in last_user_text for keyword in RECORDING_ENTER_KEYWORDS):
+        logger.bind(tag=TAG).warning(
+            f"拒绝进入录音模式：用户原文缺少明确触发词 text={last_user_text!r} reason={reason!r}"
+        )
+        return ActionResponse(
+            action=Action.NOTFOUND,
+            result="用户没有明确要求进入录音模式",
+            response=None,
+        )
+
     if getattr(conn, "recording_session", None):
         # 已经在录音模式：静默处理，不触发 TTS
         return ActionResponse(

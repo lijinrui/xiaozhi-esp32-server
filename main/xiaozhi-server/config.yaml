@@ -402,6 +402,8 @@ ASR:
     decoder: decoder.int8.onnx
     tokens: tokens.txt
     output_dir: tmp/
+    # VAD触发前额外回灌多少帧缓存音频给ASR，避免漏识别句首
+    preroll_frames: 10
     # 是否把流式中间识别结果推送给前端显示（不触发LLM/TTS）
     enable_interim_results: true
     # 中间结果推送最小间隔，避免频繁刷屏
@@ -414,6 +416,8 @@ ASR:
     interrupt_tts_on_segment: false
     # STT显示后先不发送tts start，等真正有TTS音频时再切播放态，避免过早停止上行音频
     defer_tts_start_until_audio: true
+    # TTS起播时先发送多少帧Opus静音，给设备播放器预热，避免吞掉首字
+    tts_start_padding_frames: 2
     # 是否启用 sherpa-onnx 端点检测；同时仍保留项目 VAD 停止作为兜底
     enable_endpoint_detection: true
     rule1_min_trailing_silence: 2.4

@@ -76,6 +76,7 @@ async def startToChat(conn: "ConnectionHandler", text):
         conn.current_speaker = speaker_name
     else:
         conn.current_speaker = None
+    conn.last_user_text = actual_text
 
     if conn.need_bind:
         await check_bind_device(conn)
