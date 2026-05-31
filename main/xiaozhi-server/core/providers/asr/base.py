@@ -105,10 +105,16 @@ class ASRProviderBase(ABC):
             )
 
             if conn.voiceprint_provider and wav_data:
+                voiceprint_config = conn.config.get("voiceprint", {})
+                voiceprint_timeout_ms = int(voiceprint_config.get("timeout_ms", 0) or 0)
                 voiceprint_task = conn.voiceprint_provider.identify_speaker(
                     wav_data, conn.session_id
                 )
-                # 并发等待两个结果
+                if voiceprint_timeout_ms > 0:
+                    voiceprint_task = asyncio.wait_for(
+                        voiceprint_task, timeout=voiceprint_timeout_ms / 1000
+                    )
+                # 并发等待两个结果；声纹可配置超时，避免拖住LLM首响
                 asr_result, voiceprint_result = await asyncio.gather(
                     asr_task, voiceprint_task, return_exceptions=True
                 )
@@ -123,7 +129,10 @@ class ASRProviderBase(ABC):
             else:
                 raw_text, _ = asr_result
 
-            if isinstance(voiceprint_result, Exception):
+            if isinstance(voiceprint_result, asyncio.TimeoutError):
+                logger.bind(tag=TAG).warning("声纹识别超时，使用未知说话人继续对话")
+                speaker_name = "未知说话人"
+            elif isinstance(voiceprint_result, Exception):
                 logger.bind(tag=TAG).error(f"声纹识别失败: {voiceprint_result}")
                 speaker_name = ""
             else:

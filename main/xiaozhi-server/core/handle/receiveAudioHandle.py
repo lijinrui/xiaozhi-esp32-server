@@ -61,7 +61,7 @@ async def startToChat(conn: "ConnectionHandler", text):
             data = json.loads(text)
             if "speaker" in data and "content" in data:
                 speaker_name = data["speaker"]
-                language_tag = data["language"]
+                language_tag = data.get("language")
                 actual_text = data["content"]
                 speech_content = data["content"]
                 conn.logger.bind(tag=TAG).info(f"解析到说话人信息: {speaker_name}")

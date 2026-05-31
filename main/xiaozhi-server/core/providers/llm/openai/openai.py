@@ -68,6 +68,8 @@ class LLMProvider(LLMProviderBase):
         # 单轮模式：开启后只发送 system + few-shot + 本轮消息给上游
         # 适用于上游自己维护会话上下文的场景（如 openclaw 等）
         self.single_turn = bool(config.get("single_turn", False))
+        self.disable_thinking = bool(config.get("disable_thinking", False))
+        self.extra_body = config.get("extra_body", {})
 
         model_key_msg = check_model_key("LLM", self.api_key)
         if model_key_msg:
@@ -165,6 +167,17 @@ class LLMProvider(LLMProviderBase):
 
     def _apply_thinking_disabled(self, request_params: dict):
         """根据域名自动禁用思考模式"""
+        if isinstance(self.extra_body, dict) and self.extra_body:
+            request_params.setdefault("extra_body", {}).update(self.extra_body)
+
+        if self.disable_thinking:
+            if not request_params.get("extra_body"):
+                request_params.setdefault("extra_body", {}).update(
+                    {"enable_thinking": False}
+                )
+            logger.bind(tag=TAG).info("已按配置禁用thinking/reasoning")
+            return
+
         parsed_url = urlparse(self.base_url)
         domain = parsed_url.netloc
         for disabled_domain, params in THINKING_DISABLED_DOMAINS.items():
