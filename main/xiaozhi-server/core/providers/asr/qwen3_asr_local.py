@@ -36,8 +36,8 @@ class ASRProvider(ASRProviderBase):
         self.output_dir = config.get("output_dir", "tmp/")
         self.delete_audio_file = delete_audio_file
 
-        # 流式参数
-        self.chunk_size_sec = float(config.get("chunk_size_sec", 0.3))
+        # 流式参数：chunk_size 建议 1.0s，太小会导致模型断句
+        self.chunk_size_sec = float(config.get("chunk_size_sec", 1.0))
         self.max_context_sec = float(config.get("max_context_sec", 30.0))
         self.sample_rate = 16000
         self.chunk_samples = int(self.chunk_size_sec * self.sample_rate)
