@@ -105,6 +105,8 @@ class MarkdownCleaner:
     # 预编译所有正则表达式（按执行频率排序）
     # 这里要把 replace_xxx 的静态方法放在最前定义，以便在列表里能正确引用它们。
     REGEXES = [
+        (re.compile(r'\[\[emotion:[a-zA-Z_]+\]\]'), ''),  # emotion 标记（完整格式）
+        (re.compile(r'(?:\[\[)?emotion:[a-zA-Z_]+\]?\]?'), ''),  # emotion 标记（残缺格式）
         (re.compile(r'```.*?```', re.DOTALL), ''),  # 代码块
         (re.compile(r'^#+\s*', re.MULTILINE), ''),  # 标题
         (re.compile(r'(\*\*|__)(.*?)\1'), r'\2'),  # 粗体

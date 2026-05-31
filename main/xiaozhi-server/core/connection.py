@@ -1684,7 +1684,12 @@ class ConnectionHandler:
         try:
             data = json.loads(arguments_str)
             if isinstance(data, dict):
-                return data.get("response", ""), data.get("emotion", "")
+                response = data.get("response", "")
+                emotion = data.get("emotion", "")
+                # 过滤可能混入 response 的 emotion 标记
+                response = ConnectionHandler._EMOTION_TAG_RE.sub("", response)
+                response = ConnectionHandler._EMOTION_TAG_RE_LOOSE.sub("", response)
+                return response, emotion
         except (json.JSONDecodeError, TypeError):
             pass
         # Fallback：流式阶段 JSON 可能不完整，使用字符串提取
@@ -1706,7 +1711,12 @@ class ConnectionHandler:
                     raw = raw.replace('\\"', '"').replace('\\n', '\n').replace('\\\\', '\\')
                     return raw
             return ""
-        return _extract_field("response"), _extract_field("emotion")
+        response = _extract_field("response")
+        emotion = _extract_field("emotion")
+        # 过滤可能混入 response 的 emotion 标记
+        response = ConnectionHandler._EMOTION_TAG_RE.sub("", response)
+        response = ConnectionHandler._EMOTION_TAG_RE_LOOSE.sub("", response)
+        return response, emotion
 
     _EMOTION_TAG_RE = re.compile(r'\[\[emotion:([a-zA-Z_]+)\]\]')
     _EMOTION_TAG_RE_LOOSE = re.compile(r'(?:\[\[)?emotion:([a-zA-Z_]+)\]?\]?')
