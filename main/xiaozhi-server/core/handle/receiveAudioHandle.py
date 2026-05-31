@@ -102,7 +102,14 @@ async def startToChat(conn: "ConnectionHandler", text):
 
     # 录音模式：意图未触发退出/其他 plugin 时，子串兜底；否则落盘 + 跳过主 LLM
     if getattr(conn, "recording_session", None):
-        if any(kw in actual_text for kw in RECORDING_EXIT_FALLBACK_KEYWORDS):
+        # 先检查是否是唤醒词（子串匹配，支持"你好小智，今天天气"这类包含唤醒词的表达）
+        wakeup_words = conn.config.get("wakeup_words", [])
+        if wakeup_words and any(w in actual_text for w in wakeup_words):
+            conn.logger.bind(tag=TAG).info(f"录音模式检测到唤醒词，退出录音模式: {actual_text}")
+            exit_recording_mode(conn)
+            # 继续走正常流程，让 checkWakeupWords 处理唤醒回复
+            # 注意：不走 return，继续下面的意图处理
+        elif any(kw in actual_text for kw in RECORDING_EXIT_FALLBACK_KEYWORDS):
             conn.logger.bind(tag=TAG).info(f"录音模式子串兜底退出: {actual_text}")
             result = exit_recording_mode(conn)
             await send_stt_message(conn, actual_text)
@@ -110,10 +117,11 @@ async def startToChat(conn: "ConnectionHandler", text):
                 from core.handle.intentHandler import speak_txt
                 speak_txt(conn, result.response)
             return
-        # 正常录音：写一行 JSONL，前端显示 STT，不调主 LLM、不 TTS
-        append_recording(conn, speech_content)
-        await send_stt_message(conn, actual_text)
-        return
+        else:
+            # 正常录音：写一行 JSONL，前端显示 STT，不调主 LLM、不 TTS
+            append_recording(conn, speech_content)
+            await send_stt_message(conn, actual_text)
+            return
 
     # 意图未被处理，继续常规聊天流程，使用实际文本内容
     await send_stt_message(conn, actual_text)

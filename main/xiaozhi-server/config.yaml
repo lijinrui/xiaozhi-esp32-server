@@ -270,6 +270,7 @@ Intent:
       - get_weather
       - get_news_from_newsnow
       - play_music
+      - retreat_mode
   function_call:
     # 不需要动type
     type: function_call
@@ -286,6 +287,7 @@ Intent:
       # play_music是服务器自带的音乐播放，hass_play_music是通过home assistant控制的独立外部程序音乐播放
       # 如果用了hass_play_music，就不要开启play_music，两者只留一个
       - play_music
+      - retreat_mode
       #- hass_get_state
       #- hass_set_state
       #- hass_play_music
