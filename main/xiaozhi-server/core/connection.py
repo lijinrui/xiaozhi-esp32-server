@@ -1647,7 +1647,12 @@ class ConnectionHandler:
                 # 检查是否超时（只有在时间戳已初始化的情况下）
                 if last_activity_time > 0.0:
                     current_time = time.time() * 1000
-                    if current_time - last_activity_time > self.timeout_seconds * 1000:
+                    # 录音模式下使用更长超时（60 分钟）
+                    if getattr(self, "recording_session", None):
+                        timeout_seconds = 3600
+                    else:
+                        timeout_seconds = self.timeout_seconds
+                    if current_time - last_activity_time > timeout_seconds * 1000:
                         if not self.stop_event.is_set():
                             self.logger.bind(tag=TAG).info("连接超时，准备关闭")
                             # 设置停止事件，防止重复处理

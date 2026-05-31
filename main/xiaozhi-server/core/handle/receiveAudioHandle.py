@@ -132,8 +132,8 @@ async def no_voice_close_connect(conn: "ConnectionHandler", have_voice):
     if conn.last_activity_time > 0.0:
         no_voice_time = time.time() * 1000 - conn.last_activity_time
         if getattr(conn, "recording_session", None):
-            # 录音模式下长时间静默是正常场景，使用录音模式专用超时（默认 30 分钟）
-            close_connection_no_voice_time = 1800
+            # 录音模式下长时间静默是正常场景，使用录音模式专用超时（默认 60 分钟）
+            close_connection_no_voice_time = 3600
         else:
             close_connection_no_voice_time = int(
                 conn.config.get("close_connection_no_voice_time", 120)
