@@ -402,6 +402,23 @@ ASR:
     decoder: decoder.int8.onnx
     tokens: tokens.txt
     output_dir: tmp/
+    # 是否把流式中间识别结果推送给前端显示（不触发LLM/TTS）
+    enable_interim_results: true
+    # 中间结果推送最小间隔，避免频繁刷屏
+    interim_result_interval: 0.15
+    # 中间识别文本稳定后提前触发LLM一次，用于降低首响延迟
+    enable_early_llm: false
+    early_llm_min_chars: 4
+    early_llm_stable_seconds: 0.6
+    # 播放TTS时收到新的ASR分段，是否打断当前TTS；false 表示识别/LLM继续走，播放不阻断后续输入
+    interrupt_tts_on_segment: false
+    # STT显示后先不发送tts start，等真正有TTS音频时再切播放态，避免过早停止上行音频
+    defer_tts_start_until_audio: true
+    # 是否启用 sherpa-onnx 端点检测；同时仍保留项目 VAD 停止作为兜底
+    enable_endpoint_detection: true
+    rule1_min_trailing_silence: 2.4
+    rule2_min_trailing_silence: 0.8
+    rule3_min_utterance_length: 300
   DoubaoASR:
     # 可以在这里申请相关Key等信息
     # https://console.volcengine.com/speech/app

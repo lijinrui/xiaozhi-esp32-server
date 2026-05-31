@@ -21,7 +21,7 @@ RECORDING_EXIT_FALLBACK_KEYWORDS = (
     "关闭录音",
 )
 from core.utils.output_counter import check_device_output_limit
-from core.handle.sendAudioHandle import send_stt_message, SentenceType
+from core.handle.sendAudioHandle import send_display_message, send_stt_message, SentenceType
 
 TAG = __name__
 
@@ -89,9 +89,23 @@ async def startToChat(conn: "ConnectionHandler", text):
             await max_out_size(conn)
             return
 
-    # manual 模式下不打断正在播放的内容
-    if conn.client_is_speaking and conn.client_listen_mode != "manual":
+    # manual 模式下不打断正在播放的内容；部分流式ASR也可配置为播放中继续识别/送LLM
+    interrupt_tts_on_segment = True
+    try:
+        selected_asr = conn.config.get("selected_module", {}).get("ASR")
+        asr_config = conn.config.get("ASR", {}).get(selected_asr, {})
+        interrupt_tts_on_segment = asr_config.get("interrupt_tts_on_segment", True)
+    except Exception:
+        interrupt_tts_on_segment = True
+
+    if (
+        conn.client_is_speaking
+        and conn.client_listen_mode != "manual"
+        and interrupt_tts_on_segment
+    ):
         await handleAbortMessage(conn)
+    elif conn.client_is_speaking and conn.client_listen_mode != "manual":
+        conn.logger.bind(tag=TAG).info("播放中收到新的ASR分段，继续送入LLM，不打断当前TTS")
 
     # 首先进行意图分析，使用实际文本内容
     intent_handled = await handle_user_intent(conn, actual_text)
@@ -120,7 +134,7 @@ async def startToChat(conn: "ConnectionHandler", text):
         else:
             # 正常录音：写一行 JSONL，前端显示 STT，不调主 LLM、不 TTS
             append_recording(conn, speech_content)
-            await send_stt_message(conn, actual_text)
+            await send_display_message(conn, actual_text)
             return
 
     # 意图未被处理，继续常规聊天流程，使用实际文本内容

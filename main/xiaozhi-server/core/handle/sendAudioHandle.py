@@ -27,6 +27,9 @@ async def sendAudioMessage(conn: "ConnectionHandler", sentenceType, audios, text
         conn.tts.tts_audio_first_sentence = False
 
     if sentenceType == SentenceType.FIRST:
+        if not getattr(conn, "tts_start_sent", False):
+            await send_tts_message(conn, "start")
+            conn.tts_start_sent = True
         # 同一句子的后续消息加入流控队列，其他情况立即发送
         if (
             hasattr(conn, "audio_rate_controller")
@@ -49,6 +52,7 @@ async def sendAudioMessage(conn: "ConnectionHandler", sentenceType, audios, text
     # 发送结束消息（如果是最后一个文本）
     if sentenceType == SentenceType.LAST:
         await send_tts_message(conn, "stop", None)
+        conn.tts_start_sent = False
         if conn.close_after_chat:
             await conn.close()
 
@@ -328,7 +332,13 @@ async def send_stt_message(conn: "ConnectionHandler", text):
     await conn.websocket.send(
         json.dumps({"type": "stt", "text": stt_text, "session_id": conn.session_id})
     )
+    selected_asr = conn.config.get("selected_module", {}).get("ASR")
+    asr_config = conn.config.get("ASR", {}).get(selected_asr, {})
+    if asr_config.get("defer_tts_start_until_audio", False):
+        return
+
     await send_tts_message(conn, "start")
+    conn.tts_start_sent = True
     # 发送start消息后客户端状态会处于说话中状态，同步服务端状态
     conn.client_is_speaking = True
 

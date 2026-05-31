@@ -1,8 +1,11 @@
 import asyncio
 import os
+import time
 import numpy as np
 import opuslib_next
 from config.logger import setup_logging
+from core.handle.receiveAudioHandle import startToChat
+from core.handle.sendAudioHandle import send_display_message
 from core.providers.asr.base import ASRProviderBase
 from core.providers.asr.dto.dto import InterfaceType
 from typing import Optional, Tuple, List, TYPE_CHECKING
@@ -48,7 +51,14 @@ class ASRProvider(ASRProviderBase):
         self.rule3_min_utterance_length = config.get(
             "rule3_min_utterance_length", 300
         )
-
+        self.enable_endpoint_detection = config.get("enable_endpoint_detection", True)
+        self.enable_interim_results = config.get("enable_interim_results", True)
+        self.interim_result_interval = float(config.get("interim_result_interval", 0.2))
+        self.enable_early_llm = config.get("enable_early_llm", False)
+        self.early_llm_min_chars = int(config.get("early_llm_min_chars", 4))
+        self.early_llm_stable_seconds = float(
+            config.get("early_llm_stable_seconds", 0.6)
+        )
         # 运行时状态
         self.recognizer = None
         self.stream = None
@@ -56,6 +66,12 @@ class ASRProvider(ASRProviderBase):
         self._is_stopping = False
         self.forward_task = None
         self.text = ""
+        self.last_interim_text = ""
+        self.last_interim_time = 0.0
+        self._finalizing = False
+        self.early_chat_started = False
+        self.early_chat_text = ""
+        self.last_text_change_time = 0.0
         self.decoder_opus = opuslib_next.Decoder(16000, 1)
         self._conn = None
 
@@ -88,8 +104,8 @@ class ASRProvider(ASRProviderBase):
             "feature_dim": 80,
             "decoding_method": "greedy_search",
             "provider": "cpu",
+            "enable_endpoint_detection": self.enable_endpoint_detection,
         }
-        # 端点检测参数仅 transducer / zipformer 支持
         endpoint_kwargs = {
             "rule1_min_trailing_silence": self.rule1_min_trailing_silence,
             "rule2_min_trailing_silence": self.rule2_min_trailing_silence,
@@ -108,6 +124,7 @@ class ASRProvider(ASRProviderBase):
                 encoder=encoder_path,
                 decoder=decoder_path,
                 **common_kwargs,
+                **endpoint_kwargs,
             )
         elif self.model_type in ("transducer", "zipformer"):
             encoder_path = self._resolve_path(self.encoder)
@@ -152,6 +169,12 @@ class ASRProvider(ASRProviderBase):
                 self.stream = self.recognizer.create_stream()
                 self.is_processing = True
                 self.text = ""
+                self.last_interim_text = ""
+                self.last_interim_time = 0.0
+                self._finalizing = False
+                self.early_chat_started = False
+                self.early_chat_text = ""
+                self.last_text_change_time = time.monotonic()
                 self.forward_task = asyncio.create_task(
                     self._recognize_loop(conn)
                 )
@@ -203,9 +226,12 @@ class ASRProvider(ASRProviderBase):
                 current_text = result if isinstance(result, str) else getattr(result, "text", "")
                 if current_text and current_text != self.text:
                     self.text = current_text
+                    self.last_text_change_time = time.monotonic()
                     logger.bind(tag=TAG).debug(
                         f"流式中间结果: {self.text}"
                     )
+                    await self._send_interim_result(conn, self.text)
+                await self._maybe_start_early_chat(conn)
 
                 # 端点检测触发（用户说完一句话）或手动停止
                 is_endpoint = False
@@ -233,11 +259,16 @@ class ASRProvider(ASRProviderBase):
 
                     # 触发后续处理（声纹识别 + LLM）
                     # 注意：self.text 由 speech_to_text 负责清空
-                    if (
+                    if self.early_chat_started:
+                        logger.bind(tag=TAG).info(
+                            f"已提前触发LLM，最终结果不重复处理: {final_text}"
+                        )
+                    elif (
                         final_text
                         and conn.asr_audio
                         and len(conn.asr_audio) > 0
                     ):
+                        self._finalizing = True
                         await self.handle_voice_stop(conn, conn.asr_audio)
                     break
 
@@ -249,6 +280,9 @@ class ASRProvider(ASRProviderBase):
             self.is_processing = False
             self.stream = None
             self._is_stopping = False
+            self._finalizing = False
+            self.early_chat_started = False
+            self.early_chat_text = ""
             # 重置连接音频状态，清理 asr_audio 缓存和 VAD 标志
             try:
                 conn.reset_audio_states()
@@ -278,11 +312,66 @@ class ASRProvider(ASRProviderBase):
             logger.bind(tag=TAG).error(f"发送 tail padding 失败: {e}")
             self._is_stopping = False
 
+    async def _send_interim_result(self, conn: "ConnectionHandler", text: str):
+        """把流式中间结果推给前端显示，不触发 LLM/TTS。"""
+        if not self.enable_interim_results or not text:
+            return
+
+        now = time.monotonic()
+        if text == self.last_interim_text:
+            return
+        if now - self.last_interim_time < self.interim_result_interval:
+            return
+
+        self.last_interim_text = text
+        self.last_interim_time = now
+        try:
+            await send_display_message(conn, text)
+        except Exception as e:
+            logger.bind(tag=TAG).debug(f"发送流式中间结果失败: {e}")
+
+    async def _maybe_start_early_chat(self, conn: "ConnectionHandler"):
+        """保守提前触发LLM：中间识别文本稳定后只触发一次。"""
+        if (
+            not self.enable_early_llm
+            or self.early_chat_started
+            or self._finalizing
+            or self._is_stopping
+            or not self.text
+        ):
+            return
+
+        compact_text = self.text.strip()
+        if len(compact_text) < self.early_llm_min_chars:
+            return
+
+        stable_for = time.monotonic() - self.last_text_change_time
+        if stable_for < self.early_llm_stable_seconds:
+            return
+
+        self.early_chat_started = True
+        self.early_chat_text = compact_text
+        logger.bind(tag=TAG).info(
+            f"流式识别文本稳定，提前触发LLM: {compact_text}"
+        )
+        try:
+            await startToChat(conn, compact_text)
+        except Exception as e:
+            self.early_chat_started = False
+            self.early_chat_text = ""
+            logger.bind(tag=TAG).error(f"提前触发LLM失败: {e}")
+
     def reset_stream_state(self):
         self.is_processing = False
         self._is_stopping = False
         self.stream = None
         self.text = ""
+        self.last_interim_text = ""
+        self.last_interim_time = 0.0
+        self._finalizing = False
+        self.early_chat_started = False
+        self.early_chat_text = ""
+        self.last_text_change_time = 0.0
 
     # ------------------------------------------------------------------ #
     # 接口适配
@@ -298,7 +387,7 @@ class ASRProvider(ASRProviderBase):
         return result, None
 
     def stop_ws_connection(self):
-        if self.is_processing:
+        if self.is_processing and not self._finalizing:
             asyncio.create_task(self._send_stop_request())
 
     async def close(self):
@@ -312,6 +401,9 @@ class ASRProvider(ASRProviderBase):
 
         self.is_processing = False
         self._is_stopping = False
+        self._finalizing = False
+        self.early_chat_started = False
+        self.early_chat_text = ""
         self.stream = None
 
         if hasattr(self, "decoder_opus") and self.decoder_opus:

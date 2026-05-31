@@ -9,7 +9,7 @@ from core.utils.dialogue import Message
 from core.providers.tts.dto.dto import ContentType
 from core.handle.helloHandle import checkWakeupWords
 from plugins_func.register import Action, ActionResponse
-from core.handle.sendAudioHandle import send_stt_message
+from core.handle.sendAudioHandle import send_display_message, send_stt_message
 from core.handle.reportHandle import enqueue_tool_report
 from core.utils.util import remove_punctuation_and_length
 from core.providers.tts.dto.dto import TTSMessageDTO, SentenceType
@@ -111,6 +111,7 @@ async def process_intent_result(
                 conn.logger.bind(tag=TAG).info(
                     f"录音模式忽略非退出意图: {function_name}"
                 )
+                await send_display_message(conn, original_text)
                 return False
 
             if function_name == "result_for_context":
