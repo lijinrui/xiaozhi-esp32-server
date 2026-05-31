@@ -11,6 +11,7 @@ import threading
 import traceback
 import subprocess
 import websockets
+import concurrent.futures
 
 from core.utils.util import (
     extract_json_from_string,
@@ -1021,11 +1022,19 @@ class ConnectionHandler:
             # 使用带记忆的对话
             memory_str = None
             # 仅当query非空（代表用户询问）时查询记忆
+            # 使用短超时避免记忆查询阻塞LLM首token
             if self.memory is not None and query:
                 future = asyncio.run_coroutine_threadsafe(
                     self.memory.query_memory(query), self.loop
                 )
-                memory_str = future.result()
+                try:
+                    memory_str = future.result(timeout=0.3)
+                except concurrent.futures.TimeoutError:
+                    memory_str = None
+                    self.logger.bind(tag=TAG).debug("记忆查询超时(>300ms)，本次不注入记忆，LLM先响应")
+                    # 记忆查询在后台继续，结果丢弃；后续轮次会重新查询
+                except Exception:
+                    memory_str = None
 
             if self.intent_type == "function_call" and functions is not None:
                 # 使用支持functions的streaming接口
@@ -1082,7 +1091,7 @@ class ConnectionHandler:
 
                     # 流式提取 direct_answer 的 response 参数，实时送 TTS
                     # 使用安全缓冲区，防止 JSON 闭合符号泄漏到 TTS
-                    _DA_STREAM_BUFFER = 5
+                    _DA_STREAM_BUFFER = 2
                     for tc in tool_calls_list:
                         if tc["name"] == "direct_answer" and tc.get("arguments"):
                             da_text, da_emotion = self._extract_direct_answer_response(tc["arguments"])
@@ -1271,6 +1280,16 @@ class ConnectionHandler:
                     )
                     futures_with_data.append((future, tool_call_data, tool_input))
 
+                slow_tool_notice = self.config.get("slow_tool_notice", {}) or {}
+                slow_tool_notice_enabled = bool(
+                    slow_tool_notice.get("enabled", True)
+                )
+                slow_tool_notice_timeout = (
+                    float(slow_tool_notice.get("timeout_ms", 1200) or 0) / 1000
+                )
+                slow_tool_notice_text = slow_tool_notice.get("text", "我查一下。")
+                slow_tool_notice_sent = False
+
                 # 工具调用超时时间，可配置，默认30秒
                 tool_call_timeout = int(self.config.get("tool_call_timeout", 30))
                 # 等待协程结束（实际等待时长为最慢的那个）
@@ -1278,7 +1297,32 @@ class ConnectionHandler:
 
                 for future, tool_call_data, tool_input in futures_with_data:
                     try:
-                        result = future.result(timeout=tool_call_timeout)
+                        if (
+                            slow_tool_notice_enabled
+                            and not slow_tool_notice_sent
+                            and slow_tool_notice_timeout > 0
+                        ):
+                            try:
+                                result = future.result(timeout=slow_tool_notice_timeout)
+                            except concurrent.futures.TimeoutError:
+                                self.logger.bind(tag=TAG).debug(
+                                    f"工具调用超过 {slow_tool_notice_timeout:.3f}s，先播提示语"
+                                )
+                                self.tts.tts_one_sentence(
+                                    self,
+                                    ContentType.TEXT,
+                                    content_detail=slow_tool_notice_text,
+                                    sentence_id=current_sentence_id,
+                                )
+                                self.tts.store_tts_text(
+                                    current_sentence_id, slow_tool_notice_text
+                                )
+                                slow_tool_notice_sent = True
+                                result = future.result(
+                                    timeout=max(tool_call_timeout - slow_tool_notice_timeout, 0.1)
+                                )
+                        else:
+                            result = future.result(timeout=tool_call_timeout)
                         tool_results.append((result, tool_call_data))
                         # 使用公共方法上报工具调用结果
                         enqueue_tool_report(self, tool_call_data['name'], tool_input, str(result.result) if result.result else None, report_tool_call=False)
@@ -1297,6 +1341,8 @@ class ConnectionHandler:
 
                 # 统一处理工具调用结果
                 if tool_results:
+                    if slow_tool_notice_sent:
+                        streamed_text = f"{streamed_text}{slow_tool_notice_text}"
                     self._handle_function_result(tool_results, depth=depth, streamed_text=streamed_text)
 
         # 存储对话内容
