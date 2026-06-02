@@ -175,6 +175,18 @@ server stale_packets: 0
 PASS
 ```
 
+连续 10 次稳定性验收通过，命令同上。10 次结果均满足：
+
+```text
+PASS: 10/10
+abort -> tts stop: 1.1ms ~ 2.8ms
+server abort_to_stop_ms: 0.3ms ~ 1.1ms
+server stale_packets: 0
+binary packets after abort before turn2: 0
+turn1_id / turn2_id 不同
+stop_turn_id 匹配第一轮
+```
+
 语法检查通过：
 
 ```bash
@@ -185,7 +197,9 @@ PYTHONPYCACHEPREFIX=/private/tmp/xiaozhi-pycache python3 -m py_compile ...
 
 1. 本次只验证 server text-only offline barge-in，不包含固件播放中拾音、AEC、真实硬件 stop/clear buffer。
 2. `send_turn_metrics_to_client` 只在临时验证脚本中开启，默认产品配置不会向客户端下发 metrics。
-3. 工作区中仍有两个与本次任务无关的既有本地改动未纳入本次提交：
+3. 下一阶段建议做真实 provider smoke test：使用真实 LLM/TTS 组合启动临时 server，继续用 text-only websocket 脚本触发 `listen/detect -> abort -> 第二轮 listen/detect`。验收项包括首轮能出音频、abort 后 500ms 内收到 `tts stop`、旧 turn 不再下发二进制音频、第二轮能正常开始、server metrics 中 `stale_packets` 为 0 或可解释。
+4. 兼容性回退 smoke test：将 `enable_turn_guard: false` 覆盖到 `data/.config.yaml` 或临时配置，确认服务仍能完成普通对话，且客户端消息不携带 `turn_id`。
+5. 工作区中仍有两个与本次任务无关的既有本地改动未纳入本次提交：
 
 ```text
 main/xiaozhi-server/config/assets/wakeup_words/ed76d459636c2481aec828516c1b4f54.wav
