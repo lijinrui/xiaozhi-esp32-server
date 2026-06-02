@@ -19,7 +19,7 @@ async def handleAbortMessage(conn: "ConnectionHandler"):
                 "type": "tts",
                 "state": "stop",
                 "session_id": conn.session_id,
-                "turn_id": turn_id,
+                **({"turn_id": turn_id} if turn_id is not None else {}),
             }
         )
     )

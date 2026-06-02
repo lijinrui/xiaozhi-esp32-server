@@ -122,6 +122,11 @@ class ConnectionHandler:
         self.tts_start_sent = False
 
         # 实时对话 turn 管理：用于 abort 后过滤旧 LLM/TTS/tool/audio 迟到输出
+        enable_turn_guard_value = self.config.get("enable_turn_guard", True)
+        if isinstance(enable_turn_guard_value, str):
+            self.enable_turn_guard = enable_turn_guard_value.strip().lower() != "false"
+        else:
+            self.enable_turn_guard = bool(enable_turn_guard_value)
         self.turn_seq = 0
         self.current_turn_id = None
         self.cancelled_turn_ids = set()
@@ -214,12 +219,14 @@ class ConnectionHandler:
 
     def begin_turn(self, query=None):
         """开始新的用户 turn。必须早于 STT/TTS/LLM 输出创建。"""
+        self.client_abort = False
+        if not self.enable_turn_guard:
+            return None
         with self.turn_lock:
             self.turn_seq += 1
             turn_id = f"{self.session_id}:{self.turn_seq}"
             now = time.monotonic()
             self.current_turn_id = turn_id
-            self.client_abort = False
             self.turn_metrics[turn_id] = {
                 "turn_id": turn_id,
                 "session_id": self.session_id,
@@ -237,6 +244,9 @@ class ConnectionHandler:
 
     def cancel_current_turn(self, reason="abort"):
         """取消当前 turn，并返回被取消的 turn_id。"""
+        if not self.enable_turn_guard:
+            self.client_abort = True
+            return None
         with self.turn_lock:
             turn_id = self.current_turn_id
             now = time.monotonic()
@@ -260,6 +270,8 @@ class ConnectionHandler:
         return turn_id
 
     def register_sentence_turn(self, sentence_id, turn_id):
+        if not self.enable_turn_guard:
+            return
         if sentence_id and turn_id:
             self.sentence_turn_map[sentence_id] = turn_id
             if len(self.sentence_turn_map) > 20:
@@ -270,6 +282,8 @@ class ConnectionHandler:
         return self.sentence_turn_map.get(sentence_id)
 
     def is_current_turn(self, turn_id):
+        if not self.enable_turn_guard:
+            return True
         if turn_id is None:
             return True
         return turn_id == self.current_turn_id and turn_id not in self.cancelled_turn_ids
@@ -282,6 +296,8 @@ class ConnectionHandler:
         return self.is_current_turn(turn_id)
 
     def mark_llm_first_token(self, turn_id):
+        if not self.enable_turn_guard:
+            return
         if turn_id is None:
             return
         with self.turn_lock:
@@ -290,6 +306,8 @@ class ConnectionHandler:
                 metrics["llm_first_token_at"] = time.monotonic()
 
     def mark_tts_first_audio(self, turn_id):
+        if not self.enable_turn_guard:
+            return
         if turn_id is None:
             return
         with self.turn_lock:
@@ -298,6 +316,8 @@ class ConnectionHandler:
                 metrics["tts_first_audio_at"] = time.monotonic()
 
     def mark_stale_audio_packet(self, turn_id):
+        if not self.enable_turn_guard:
+            return
         if turn_id is None:
             return
         with self.turn_lock:
@@ -305,6 +325,8 @@ class ConnectionHandler:
             metrics["stale_packets"] = int(metrics.get("stale_packets") or 0) + 1
 
     def mark_tts_stop_sent(self, turn_id):
+        if not self.enable_turn_guard:
+            return
         if turn_id is None:
             return
         with self.turn_lock:
@@ -313,12 +335,16 @@ class ConnectionHandler:
         self.log_turn_metrics(turn_id)
 
     def register_tool_future(self, turn_id, future):
+        if not self.enable_turn_guard:
+            return
         if turn_id is None or future is None:
             return
         with self.turn_lock:
             self.active_tool_futures.setdefault(turn_id, []).append(future)
 
     def unregister_tool_future(self, turn_id, future):
+        if not self.enable_turn_guard:
+            return
         if turn_id is None or future is None:
             return
         with self.turn_lock:
@@ -333,6 +359,8 @@ class ConnectionHandler:
                 self.active_tool_futures.pop(turn_id, None)
 
     def wait_turn_future(self, future, turn_id, timeout, interval=0.05):
+        if not self.enable_turn_guard:
+            return future.result(timeout=timeout)
         deadline = time.monotonic() + timeout if timeout is not None else None
         while True:
             if self.client_abort or not self.is_current_turn(turn_id):
@@ -346,6 +374,8 @@ class ConnectionHandler:
                     raise
 
     def log_turn_metrics(self, turn_id):
+        if not self.enable_turn_guard:
+            return
         metrics = self.turn_metrics.get(turn_id)
         if not metrics:
             return

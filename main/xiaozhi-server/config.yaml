@@ -63,6 +63,10 @@ close_connection_no_voice_time: 120
 tts_timeout: 10
 # 工具调用超时时间(秒)
 tool_call_timeout: 30
+# 是否启用服务端 turn guard。开启后会给每轮对话分配 turn_id，
+# abort 时取消当前 turn，并过滤旧 turn 的 LLM/TTS/tool/audio 迟到输出。
+# 如果线上客户端或第三方 provider 对新增 turn_id/取消行为不兼容，可在 data/.config.yaml 中设为 false 临时回退旧行为。
+enable_turn_guard: true
 # 开启唤醒词加速
 enable_wakeup_words_response_cache: true
 # 开场是否回复唤醒词

@@ -115,6 +115,8 @@ wait_turn_future()
 
 Reviewer follow-up：`core/handle/intentHandler.py` 的 intent/function-call 旁路也已接入同一套 turn/cancel 体系。intent 命中时会创建 turn，`speak_txt()` 写入 TTS 队列时携带 `turn_id`，单工具与批量工具的 coroutine future 会注册到 `active_tool_futures`，abort 后旧 turn 的 intent 工具结果不会再进入 TTS。
 
+兼容性开关：`config.yaml` 新增 `enable_turn_guard: true`。默认开启以保留本分支的可验收行为；线上如遇客户端或第三方 provider 对新增 `turn_id`/取消行为不兼容，可在 `data/.config.yaml` 覆盖为 `false` 临时回退旧行为。临时验证 server 会显式开启该开关。
+
 ### 2.6 Offline 验证工具
 
 扩展 `codex-tools/offline_barge_in_test/offline_barge_in_test.py`：
@@ -159,16 +161,16 @@ main/xiaozhi-server/venv/bin/python codex-tools/offline_barge_in_test/offline_ba
 通过结果：
 
 ```text
-turn1 -> sentence_start: 273.3ms
-turn1 -> first audio: 293.7ms
-abort -> tts stop: 1.2ms
-turn2 -> TTS start: 173.6ms
-turn2 -> first audio: 197.1ms
+turn1 -> sentence_start: 170.1ms
+turn1 -> first audio: 194.9ms
+abort -> tts stop: 0.9ms
+turn2 -> TTS start: 173.3ms
+turn2 -> first audio: 195.7ms
 binary packets after abort before turn2: 0
 server cancel_reason: client_abort
 server llm_first_token_ms: 86.0
-server tts_first_audio_ms: 191.9
-server abort_to_stop_ms: 0.4
+server tts_first_audio_ms: 193.4
+server abort_to_stop_ms: 0.2
 server stale_packets: 0
 PASS
 ```

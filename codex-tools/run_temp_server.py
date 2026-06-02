@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import uuid
 from pathlib import Path
 import sys
 
 
 SERVER_ROOT = Path(__file__).resolve().parents[1] / "main" / "xiaozhi-server"
+os.chdir(SERVER_ROOT)
 sys.path.insert(0, str(SERVER_ROOT))
 
 from config.settings import load_config
@@ -29,6 +31,7 @@ async def run(args: argparse.Namespace) -> None:
     config["server"]["http_port"] = args.http_port
     config["server"].setdefault("auth", {})["enabled"] = False
     config["server"]["auth_key"] = config["server"].get("auth_key") or uuid.uuid4().hex
+    config["enable_turn_guard"] = True
     config["send_turn_metrics_to_client"] = True
     if args.offline_test_providers:
         config.setdefault("selected_module", {})["LLM"] = "OfflineTestLLM"

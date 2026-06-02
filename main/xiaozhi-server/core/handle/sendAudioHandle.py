@@ -365,16 +365,14 @@ async def send_stt_message(conn: "ConnectionHandler", text):
         # 如果不是JSON格式，直接使用原始文本
         display_text = text
     stt_text = textUtils.get_string_no_punctuation_or_emoji(display_text)
-    await conn.websocket.send(
-        json.dumps(
-            {
-                "type": "stt",
-                "text": stt_text,
-                "session_id": conn.session_id,
-                "turn_id": conn.current_turn_id,
-            }
-        )
-    )
+    message = {
+        "type": "stt",
+        "text": stt_text,
+        "session_id": conn.session_id,
+    }
+    if conn.current_turn_id is not None:
+        message["turn_id"] = conn.current_turn_id
+    await conn.websocket.send(json.dumps(message))
     selected_asr = conn.config.get("selected_module", {}).get("ASR")
     asr_config = conn.config.get("ASR", {}).get(selected_asr, {})
     if asr_config.get("defer_tts_start_until_audio", False):
@@ -392,6 +390,7 @@ async def send_display_message(conn: "ConnectionHandler", text):
         "type": "stt",
         "text": text,
         "session_id": conn.session_id,
-        "turn_id": conn.current_turn_id,
     }
+    if conn.current_turn_id is not None:
+        message["turn_id"] = conn.current_turn_id
     await conn.websocket.send(json.dumps(message))
