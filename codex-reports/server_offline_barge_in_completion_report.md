@@ -187,6 +187,35 @@ turn1_id / turn2_id 不同
 stop_turn_id 匹配第一轮
 ```
 
+真实 provider smoke test 通过：
+
+```text
+provider: MiniMaxLLM + EdgeTTS + Qwen3ASRLocal + function_call intent
+turn1 -> sentence_start: 4966.3ms
+turn1 -> first audio: 5048.7ms
+abort -> tts stop: 1.4ms
+turn2 -> TTS start: 4187.7ms
+turn2 -> first audio: 4264.1ms
+server llm_first_token_ms: 3282.7
+server tts_first_audio_ms: 4946.9
+server abort_to_stop_ms: 0.3
+server stale_packets: 0
+binary packets after abort before turn2: 0
+PASS
+```
+
+兼容性回退 smoke test 通过：
+
+```text
+enable_turn_guard: false
+text_messages: 5
+binary_packets: 3
+turn_id_messages: 0
+PASS
+```
+
+真实 EdgeTTS smoke 运行时需要确保 `ffmpeg/ffprobe` 在 PATH 中；本机使用 `/opt/homebrew/bin`。
+
 语法检查通过：
 
 ```bash
@@ -197,8 +226,8 @@ PYTHONPYCACHEPREFIX=/private/tmp/xiaozhi-pycache python3 -m py_compile ...
 
 1. 本次只验证 server text-only offline barge-in，不包含固件播放中拾音、AEC、真实硬件 stop/clear buffer。
 2. `send_turn_metrics_to_client` 只在临时验证脚本中开启，默认产品配置不会向客户端下发 metrics。
-3. 下一阶段建议做真实 provider smoke test：使用真实 LLM/TTS 组合启动临时 server，继续用 text-only websocket 脚本触发 `listen/detect -> abort -> 第二轮 listen/detect`。验收项包括首轮能出音频、abort 后 500ms 内收到 `tts stop`、旧 turn 不再下发二进制音频、第二轮能正常开始、server metrics 中 `stale_packets` 为 0 或可解释。
-4. 兼容性回退 smoke test：将 `enable_turn_guard: false` 覆盖到 `data/.config.yaml` 或临时配置，确认服务仍能完成普通对话，且客户端消息不携带 `turn_id`。
+3. 下一阶段建议升级到 PC wav/Opus 注入测试：`wav -> opus frames -> websocket binary -> ASR -> LLM/TTS -> abort`。
+4. 真机侧仍需联调：设备收到 `tts stop` 后立刻停播、清空播放 buffer、播放时继续采音/VAD、插话时发 abort/listen。
 5. 工作区中仍有两个与本次任务无关的既有本地改动未纳入本次提交：
 
 ```text
