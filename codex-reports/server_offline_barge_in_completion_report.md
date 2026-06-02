@@ -113,6 +113,8 @@ wait_turn_future()
 
 如果 turn 已取消，立即 cancel future 并退出旧 turn，避免长期占住 chat executor worker。
 
+Reviewer follow-up：`core/handle/intentHandler.py` 的 intent/function-call 旁路也已接入同一套 turn/cancel 体系。intent 命中时会创建 turn，`speak_txt()` 写入 TTS 队列时携带 `turn_id`，单工具与批量工具的 coroutine future 会注册到 `active_tool_futures`，abort 后旧 turn 的 intent 工具结果不会再进入 TTS。
+
 ### 2.6 Offline 验证工具
 
 扩展 `codex-tools/offline_barge_in_test/offline_barge_in_test.py`：

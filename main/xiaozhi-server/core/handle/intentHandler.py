@@ -1,6 +1,7 @@
 import json
 import uuid
 import asyncio
+import concurrent.futures
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -115,10 +116,14 @@ async def process_intent_result(
                 return False
 
             if function_name == "result_for_context":
+                turn_id = conn.begin_turn(original_text)
+                conn.register_sentence_turn(conn.sentence_id, turn_id)
                 await send_stt_message(conn, original_text)
                 conn.client_abort = False
 
                 def process_context_result():
+                    if not conn.is_current_turn(turn_id):
+                        return
                     conn.dialogue.put(Message(role="user", content=original_text))
 
                     from core.utils.current_time import get_current_time_info
@@ -135,7 +140,7 @@ async def process_intent_result(
                                         请根据以上信息回答用户的问题：{original_text}"""
 
                     response = conn.intent.replyResult(context_prompt, original_text)
-                    speak_txt(conn, response)
+                    speak_txt(conn, response, turn_id)
 
                 conn.executor.submit(process_context_result)
                 return True
@@ -161,6 +166,8 @@ async def process_intent_result(
                 "arguments": function_args,
             }
 
+            turn_id = conn.begin_turn(original_text)
+            conn.register_sentence_turn(conn.sentence_id, turn_id)
             await send_stt_message(conn, original_text)
             conn.client_abort = False
 
@@ -177,46 +184,58 @@ async def process_intent_result(
 
             # 使用executor执行函数调用和结果处理
             def process_function_call():
+                if not conn.is_current_turn(turn_id):
+                    return
                 conn.dialogue.put(Message(role="user", content=original_text))
-                
+
                 # 工具调用超时时间
                 tool_call_timeout = int(conn.config.get("tool_call_timeout", 30))
                 # 使用统一工具处理器处理所有工具调用
+                future = None
                 try:
-                    result = asyncio.run_coroutine_threadsafe(
+                    future = asyncio.run_coroutine_threadsafe(
                         conn.func_handler.handle_llm_function_call(
                             conn, function_call_data
                         ),
                         conn.loop,
-                    ).result(timeout=tool_call_timeout)
+                    )
+                    conn.register_tool_future(turn_id, future)
+                    result = conn.wait_turn_future(future, turn_id, tool_call_timeout)
+                except concurrent.futures.CancelledError:
+                    conn.logger.bind(tag=TAG).debug(f"意图工具调用已取消: {turn_id}")
+                    return
                 except Exception as e:
                     conn.logger.bind(tag=TAG).error(f"工具调用失败: {e}")
                     result = ActionResponse(
                         action=Action.ERROR, result="工具调用超时，请一会再试下哈", response="工具调用超时，请一会再试下哈"
                     )
+                finally:
+                    conn.unregister_tool_future(turn_id, future)
 
                 # 上报工具调用结果
-                if result:
+                if result and conn.is_current_turn(turn_id):
                     enqueue_tool_report(conn, function_name, tool_input, str(result.result) if result.result else None, report_tool_call=False)
 
                     if result.action == Action.RESPONSE:  # 直接回复前端
                         text = result.response
                         if text is not None:
-                            speak_txt(conn, text)
+                            speak_txt(conn, text, turn_id)
                     elif result.action == Action.REQLLM:  # 调用函数后再请求llm生成回复
                         text = result.result
                         conn.dialogue.put(Message(role="tool", content=text))
                         llm_result = conn.intent.replyResult(text, original_text)
+                        if not conn.is_current_turn(turn_id):
+                            return
                         if llm_result is None:
                             llm_result = text
-                        speak_txt(conn, llm_result)
+                        speak_txt(conn, llm_result, turn_id)
                     elif (
                         result.action == Action.NOTFOUND
                         or result.action == Action.ERROR
                     ):
                         text = result.response if result.response else result.result
                         if text is not None:
-                            speak_txt(conn, text)
+                            speak_txt(conn, text, turn_id)
                     elif function_name != "play_music":
                         # For backward compatibility with original code
                         # 获取当前最新的文本索引
@@ -224,7 +243,7 @@ async def process_intent_result(
                         if text is None:
                             text = result.result
                         if text is not None:
-                            speak_txt(conn, text)
+                            speak_txt(conn, text, turn_id)
 
             # 将函数执行放在线程池中
             conn.executor.submit(process_function_call)
@@ -249,6 +268,8 @@ async def process_intent_result(
             if not valid_calls:
                 return False
 
+            turn_id = conn.begin_turn(original_text)
+            conn.register_sentence_turn(conn.sentence_id, turn_id)
             await send_stt_message(conn, original_text)
             conn.client_abort = False
 
@@ -264,32 +285,42 @@ async def process_intent_result(
             function_call_data = {"function_calls": call_list}
 
             def process_multiple_calls():
+                if not conn.is_current_turn(turn_id):
+                    return
                 conn.dialogue.put(Message(role="user", content=original_text))
                 tool_call_timeout = int(conn.config.get("tool_call_timeout", 30))
+                future = None
                 try:
-                    result = asyncio.run_coroutine_threadsafe(
+                    future = asyncio.run_coroutine_threadsafe(
                         conn.func_handler.handle_llm_function_call(conn, function_call_data),
                         conn.loop,
-                    ).result(timeout=tool_call_timeout)
+                    )
+                    conn.register_tool_future(turn_id, future)
+                    result = conn.wait_turn_future(future, turn_id, tool_call_timeout)
+                except concurrent.futures.CancelledError:
+                    conn.logger.bind(tag=TAG).debug(f"批量意图工具调用已取消: {turn_id}")
+                    return
                 except Exception as e:
                     conn.logger.bind(tag=TAG).error(f"批量工具调用失败: {e}")
                     result = ActionResponse(
                         action=Action.ERROR, result="工具调用超时", response="工具调用超时，请一会再试下哈"
                     )
+                finally:
+                    conn.unregister_tool_future(turn_id, future)
 
-                if result:
+                if result and conn.is_current_turn(turn_id):
                     if result.action == Action.RESPONSE:
                         text = result.response
                         if text is not None:
-                            speak_txt(conn, text)
+                            speak_txt(conn, text, turn_id)
                     elif result.action in (Action.NOTFOUND, Action.ERROR):
                         text = result.response if result.response else result.result
                         if text is not None:
-                            speak_txt(conn, text)
+                            speak_txt(conn, text, turn_id)
                     else:
                         text = result.response if result.response else result.result
                         if text is not None:
-                            speak_txt(conn, text)
+                            speak_txt(conn, text, turn_id)
 
             conn.executor.submit(process_multiple_calls)
             return True
@@ -300,7 +331,12 @@ async def process_intent_result(
         return False
 
 
-def speak_txt(conn: "ConnectionHandler", text):
+def speak_txt(conn: "ConnectionHandler", text, turn_id=None):
+    if turn_id is not None:
+        conn.register_sentence_turn(conn.sentence_id, turn_id)
+        if not conn.is_current_turn(turn_id):
+            conn.logger.bind(tag=TAG).debug(f"跳过旧turn意图回复: {turn_id}")
+            return
     # 记录文本到 sentence_id 映射
     conn.tts.store_tts_text(conn.sentence_id, text)
 
@@ -309,6 +345,7 @@ def speak_txt(conn: "ConnectionHandler", text):
             sentence_id=conn.sentence_id,
             sentence_type=SentenceType.FIRST,
             content_type=ContentType.ACTION,
+            turn_id=turn_id,
         )
     )
     conn.tts.tts_one_sentence(conn, ContentType.TEXT, content_detail=text)
@@ -317,6 +354,7 @@ def speak_txt(conn: "ConnectionHandler", text):
             sentence_id=conn.sentence_id,
             sentence_type=SentenceType.LAST,
             content_type=ContentType.ACTION,
+            turn_id=turn_id,
         )
     )
     conn.dialogue.put(Message(role="assistant", content=text))
