@@ -92,7 +92,9 @@ agent speaking
 
 ### 3.4 AEC
 
-ESP32-S3 可使用 Espressif ESP-SR AFE/AEC。它适合全双工人机交互、语音唤醒、播放时识别等场景。当前 DeskEmoji 硬件使用单麦 INMP441 + MAX98357A，可以做可用级 AEC/barge-in，但不应期待商用音箱级效果。
+ESP32-S3 可使用 Espressif ESP-SR AFE/AEC。它适合全双工人机交互、语音唤醒、播放时识别等场景。
+
+当前硬件路线已经更新：优先使用立创实战派 ESP32-S3 / SZPI-ESP32S3，而不是继续围绕 DeskEmoji 单麦方案做主验证。这块板有双麦、ES7210 多通道输入、ES8311 输出反馈到 ES7210 的 MIC3，结构上更适合做播放中插话和 AEC reference。
 
 ## 4. 关键设计原则
 
@@ -347,31 +349,40 @@ optional AEC active
 
 ### 8.3 AEC
 
-现有 DeskEmoji 硬件：
+目标硬件：
 
 ```text
-ESP32-S3 N16R8
-INMP441 单麦
-MAX98357A I2S 功放
-单喇叭
+立创实战派 ESP32-S3 / SZPI-ESP32S3
+ESP32-S3-WROOM-1-N16R8
+ES7210 ADC
+  MIC1: 用户语音输入
+  MIC2: 用户语音输入
+  MIC3: ES8311 输出反馈，用作 AEC reference
+ES8311 DAC
+NS4150B 功放
+ZTS6216 双麦
+1W 喇叭
 ```
 
 判断：
 
 ```text
-可做可用级 AEC/barge-in
-难做商用智能音箱级全双工
+这块板具备做“桌面机器人级可打断”的关键硬件条件。
+它不是为了研究 AEC 底层最标准的板，而是更适合把完整产品体验搭起来。
+双麦 + 播放反馈通道让后续 ESP-SR AFE/AEC 更有落点。
 ```
 
 建议：
 
 ```text
-先做无 AEC 的高阈值播放中 VAD
-再接入 ESP-SR AFE/AEC
-使用播放 PCM 作为 reference
-mic PCM 作为 input
-AEC output 给 VAD
-初期只让 AEC 服务于 barge-in 判断，不急着给完整 ASR
+第一阶段仍然先做 server 离线验证，不依赖硬件闭环。
+第二阶段固件先实现播放队列 stop/clear 和播放时 mic capture active。
+第三阶段用高阈值 VAD 验证播放中插话。
+第四阶段接 ESP-SR AFE/AEC：
+  MIC1/MIC2 作为 near-end speech input
+  MIC3/ES8311 feedback 作为 echo reference
+  AEC output 先给 VAD/barge-in 判断
+  稳定后再考虑把 AEC output 送完整 ASR
 ```
 
 硬件结构建议：
@@ -381,7 +392,9 @@ AEC output 给 VAD
 喇叭不要正对麦克风
 控制最大播放音量
 外壳避免强反射腔
-条件允许时升级双麦或麦阵列
+利用双麦输入
+调试 MIC3 播放反馈链路的时序和增益
+不要在 server cancel path 未稳定前深度调 AEC
 ```
 
 ## 9. Provider 推荐
@@ -636,12 +649,12 @@ Speaking 状态下继续采音并检测插话。
 ## 12. 第一版推荐组合
 
 ```text
-ASR: XunfeiStreamASR
-LLM: qwen-flash / Doubao 低延迟流式模型
-TTS: HuoshanDoubleStreamTTS
+ASR: M3 Ultra 优先 Qwen3ASRLocal；需要更低延迟时对比 SherpaASRStream
+LLM: LMStudioLLM 本地优先；Kimi / MiniMax 云端作效果或兜底对比
+TTS: 第一阶段 EdgeTTS 跑通链路；再评估 MiniMax / IndexStreamTTS / Paddle 等低延迟方案
 VAD: 设备端 ESP-SR VAD/AEC + 服务端 SileroVAD 兜底
 协议: 继续 WebSocket
-设备: 先实现播放队列 stop/clear，再做 AEC
+设备: lckfb-esp32-s3；先实现播放队列 stop/clear，再做 AEC
 ```
 
 ## 13. 暂不优先做的事项
@@ -672,6 +685,5 @@ Protocol v4
 3. MCP 工具权限分级，防止 partial 阶段误执行硬件动作。
 4. Device Shadow + Telemetry，用于动态下发 audio profile。
 5. WebRTC / QUIC Gateway，用于浏览器和移动端数字人。
-6. 双麦/麦阵列硬件升级，提升 AEC 和远场拾音。
+6. 围绕 lckfb-esp32-s3 调 ESP-SR AFE/AEC，重点验证 MIC3 playback feedback 的参考信号质量。
 ```
-

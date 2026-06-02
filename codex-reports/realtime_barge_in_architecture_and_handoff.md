@@ -533,35 +533,70 @@ GPT-SoVITS
 更严谨设备状态同步
 ```
 
-## 11. 硬件选型原则
+## 11. 目标硬件：立创实战派 ESP32-S3
 
-当前理解：
+当前已经确定主验证硬件：
 
 ```text
-Server 决定体验逻辑。
-硬件决定播放时能否听清用户、误触发多不多。
+立创实战派 ESP32-S3 / SZPI-ESP32S3
+内部代号建议：lckfb-esp32-s3
 ```
 
-硬件关键要求：
+关键配置：
 
 ```text
-1. 双麦阵列优于单麦。
-2. 能提供稳定 AEC reference 更好。
-3. 播放时 mic 必须继续工作。
-4. 能快速 stop/clear 播放缓存。
-5. 麦克风和喇叭物理隔离。
+ESP32-S3-WROOM-1-N16R8
+PSRAM 8MB / Flash 16MB
+ES7210 四通道 ADC，开发板使用三路
+  MIC1: 用户语音输入
+  MIC2: 用户语音输入
+  MIC3: ES8311 输出反馈，用作 AEC reference
+ES8311 音频 DAC
+NS4150B 功放
+ZTS6216 双麦
+1W 喇叭
+ST7789 屏幕 / FT6336 触摸
 ```
 
-推荐板：
+结论：
 
 ```text
-ESP32-S3-BOX-3:
-  能做 AEC。
-  适合快速验证桌面语音助手和播放中插话。
+这块板比 BOX-3 / Korvo-2 更适合作为当前项目主硬件。
+原因不是它 AEC 底层研究能力最强，而是它已经具备“搭出可用桌面机器人”的关键链路：
 
-ESP32-S3-Korvo-2:
-  更适合研究标准 AEC 硬件链路。
-  有更明确的 echo reference path。
+1. 双麦输入。
+2. ES7210 多通道采集。
+3. ES8311 播放输出反馈到 ES7210 MIC3，可作为 AEC reference。
+4. 有屏幕、触摸、喇叭、电池/Type-C 等完整产品形态。
+5. 用户已经有明确资料和购买路径。
+```
+
+当前策略：
+
+```text
+不要再优先购买 BOX-3 或 Korvo-2。
+先把 server 和离线打断验证跑稳。
+再围绕 lckfb-esp32-s3 做固件适配。
+```
+
+固件适配顺序：
+
+```text
+1. 跑通 ES7210 三路采集和 ES8311 播放。
+2. 跑通小智 WebSocket 协议。
+3. 实现播放队列 stop/clear。
+4. 播放时保持 mic capture active。
+5. 先用高阈值 VAD 做可打断。
+6. 再接 ESP-SR AFE/AEC，把 MIC3 playback feedback 作为 echo reference。
+7. AEC output 先服务于 barge-in 判断，再考虑送完整 ASR。
+```
+
+硬件资料：
+
+```text
+https://docs.gtai-tech.com/node/0198944f-25cd-7af2-b6bb-d2b6ad5dd60a
+https://wiki.lckfb.com/zh-hans/szpi-esp32s3/beginner/introduction.html
+https://wiki.lckfb.com/zh-hans/szpi-esp32s3/beginner/audio-input-es7210.html
 ```
 
 ## 12. 当前已完成改动
@@ -670,13 +705,16 @@ interrupt.wav 自动注入
 3. 配置本地 xiaozhi-server 环境。
 4. 使用 Qwen3ASRLocal + LMStudioLLM + EdgeTTS 跑 offline_barge_in_test。
 5. 根据 metrics 修改 server cancel path。
-6. 每次修改后更新本报告的“当前已完成改动”和“下一步代码任务”。
+6. 确认 abort 后 stale audio packet 是否稳定 <= 2。
+7. 再扩展 PC wav/Opus 注入测试。
+8. 硬件按 lckfb-esp32-s3 做后续固件适配，不从 BOX-3 / Korvo-2 起步。
+9. 每次修改后更新本报告的“当前已完成改动”和“下一步代码任务”。
 ```
 
 不要一开始做：
 
 ```text
-硬件 AEC
+硬件 AEC 深度调参
 Protocol v4
 ASR partial 预热
 Device Shadow
@@ -687,7 +725,8 @@ Device Shadow
 
 ```text
 server abort/cancel/stale-output
+text-only offline barge-in
+PC wav/Opus offline barge-in
 ```
 
 做到可测、可重复、可量化。
-
