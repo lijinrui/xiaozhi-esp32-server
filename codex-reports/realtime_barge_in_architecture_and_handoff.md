@@ -2,6 +2,77 @@
 
 生成时间：2026-06-02
 
+## 0. 可检测 Goal
+
+长任务目标：
+
+```text
+在 xiaozhi-esp32-server 上实现并验证一条可取消、可观测、可重复测试的实时语音 turn 链路：
+
+final ASR -> LLM streaming -> TTS streaming
+播放中监听 -> 用户插话 -> cancel current turn -> start next turn
+```
+
+验收方式：
+
+```text
+使用 codex-tools/offline_barge_in_test/offline_barge_in_test.py 或其扩展版，在没有真实硬件的电脑环境中完成可重复验证。
+```
+
+必须通过的行为验收：
+
+```text
+1. server 能完成第一轮用户输入 -> LLM/TTS 开始输出。
+2. 测试客户端在检测到第一轮 TTS start 或 audio packet 后发送 abort。
+3. server 在收到 abort 后发送 tts stop。
+4. abort 后第一轮的 LLM token、TTS 文本、TTS 音频、tool result 不再继续下发给客户端。
+5. 第二轮用户输入可以立即进入新的 turn。
+6. 第二轮回复内容不混入第一轮被打断的残留内容。
+7. 对话历史只记录已确认应该保留的内容，被打断且未完成播放的 assistant 内容不能污染下一轮。
+```
+
+量化验收指标：
+
+```text
+abort_to_tts_stop_ms <= 500ms
+abort 后到第二轮开始前 stale audio packet <= 2
+第二轮 listen/detect 到 tts start <= 2500ms，本地模型冷启动除外
+连续运行 10 次 offline barge-in test，成功率 >= 90%
+server 日志中每个 turn 都有 turn_id/session_id/cancel_reason/metrics summary
+```
+
+需要交付的代码能力：
+
+```text
+1. TurnManager 或等价机制：每轮都有唯一 turn_id。
+2. cancel path：abort 能取消当前 LLM/TTS/tool 任务。
+3. stale output filter：旧 turn 的迟到输出会被丢弃。
+4. audio queue clear：abort 后清空待发送音频。
+5. metrics：输出 asr_final_ms、llm_first_token_ms、tts_first_audio_ms、abort_to_stop_ms、stale_packets。
+6. offline test：至少支持 text-only barge-in；扩展目标是 PC wav/Opus 注入。
+```
+
+失败判定：
+
+```text
+只要出现以下任一情况，就不能算完成：
+
+1. abort 后旧回答继续播放或继续下发明显音频。
+2. 第二轮回复混入第一轮残留内容。
+3. 只能靠真实硬件验证，无法在电脑上离线复现。
+4. 没有 metrics，无法判断延迟和 stale packet 数量。
+5. 需要大规模重构但没有保留现有 provider/config 兼容性。
+```
+
+非目标：
+
+```text
+第一阶段不要求完成硬件 AEC 调参。
+第一阶段不要求 ASR partial 直接驱动 LLM 正式回复。
+第一阶段不要求 Protocol v4、WebRTC、Device Shadow。
+第一阶段不要求商用智能音箱级远场全双工。
+```
+
 ## 1. 背景与目标
 
 当前目标不是一步到位做商用智能音箱级全双工，而是先做出“桌面机器人级可打断、播放时还能听见用户插话”的体验。

@@ -2,6 +2,32 @@
 
 生成时间：2026-06-02 12:15 CST
 
+## 0. 可检测 Goal
+
+本计划的第一阶段完成标准不是“感觉更流畅”，而是下面这组可以由电脑离线测试验证的目标：
+
+```text
+实现并验证：
+
+final ASR -> LLM streaming -> TTS streaming
+播放中监听 -> 用户插话 -> cancel current turn -> start next turn
+```
+
+必须通过：
+
+```text
+1. 使用 codex-tools/offline_barge_in_test/offline_barge_in_test.py 或其扩展版可重复测试。
+2. 第一轮输入能触发 LLM/TTS streaming 输出。
+3. 播放中 abort 后，server 在 500ms 内发送 tts stop。
+4. abort 后旧 turn 的 LLM/TTS/tool 迟到输出被丢弃。
+5. abort 后 stale audio packet <= 2。
+6. 第二轮输入能立即进入新 turn，回复不混入第一轮残留内容。
+7. 连续运行 10 次 offline barge-in test，成功率 >= 90%。
+8. 每轮日志输出 turn_id、cancel_reason、asr_final_ms、llm_first_token_ms、tts_first_audio_ms、abort_to_stop_ms、stale_packets。
+```
+
+第一阶段不以硬件 AEC、ASR partial 正式抢答、Protocol v4、WebRTC、Device Shadow 为完成条件。
+
 ## 1. 目标
 
 本报告面向 `xiaozhi-esp32-server` 与 `xiaozhi-esp32` 的下一阶段体验升级，目标不是完整商用智能音箱级全双工，而是先做成：
