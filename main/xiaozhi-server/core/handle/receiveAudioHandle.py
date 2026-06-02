@@ -139,12 +139,10 @@ async def startToChat(conn: "ConnectionHandler", text):
             return
 
     # 意图未被处理，继续常规聊天流程，使用实际文本内容
+    turn_id = conn.begin_turn(actual_text)
     await send_stt_message(conn, actual_text)
 
-    # 准备开始新会话
-    conn.client_abort = False
-
-    conn.executor.submit(conn.chat, actual_text)
+    conn.executor.submit(conn.chat, actual_text, turn_id=turn_id)
 
 
 async def no_voice_close_connect(conn: "ConnectionHandler", have_voice):

@@ -35,9 +35,12 @@ class TTSMessageDTO:
         content_detail: Optional[str] = None,
         # 如果内容类型为文件，则需要传入文件路径
         content_file: Optional[str] = None,
+        # 可选：整轮对话ID，用于打断后过滤旧 turn 的迟到 TTS
+        turn_id: Optional[str] = None,
     ):
         self.sentence_id = sentence_id
         self.sentence_type = sentence_type
         self.content_type = content_type
         self.content_detail = content_detail
         self.content_file = content_file
+        self.turn_id = turn_id

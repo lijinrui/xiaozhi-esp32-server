@@ -115,8 +115,7 @@ class TTSProvider(TTSProviderBase):
                         logger.bind(tag=TAG).error(f"取消TTS会话失败: {str(e)}")
                         continue
 
-                # 过滤旧消息：检查sentence_id是否匹配
-                if message.sentence_id != self.conn.sentence_id:
+                if not self.prepare_tts_message(message):
                     continue
 
                 logger.bind(tag=TAG).debug(
@@ -137,7 +136,7 @@ class TTSProvider(TTSProviderBase):
                             self.start_session(self.conn.sentence_id),
                             loop=self.conn.loop,
                         )
-                        future.result(timeout=self.tts_timeout)
+                        self.wait_tts_future(future, message.turn_id, self.tts_timeout)
                         self.before_stop_play_files.clear()
                         logger.bind(tag=TAG).debug("TTS会话启动成功")
                     except Exception as e:
@@ -154,7 +153,7 @@ class TTSProvider(TTSProviderBase):
                                 self.text_to_speak(message.content_detail, None),
                                 loop=self.conn.loop,
                             )
-                            future.result(timeout=self.tts_timeout)
+                            self.wait_tts_future(future, message.turn_id, self.tts_timeout)
                         except Exception as e:
                             logger.bind(tag=TAG).error(f"发送TTS文本失败: {str(e)}")
                             continue
@@ -174,7 +173,7 @@ class TTSProvider(TTSProviderBase):
                             self.finish_session(self.conn.sentence_id),
                             loop=self.conn.loop,
                         )
-                        future.result()
+                        self.wait_tts_future(future, message.turn_id, self.tts_timeout)
                     except Exception as e:
                         logger.bind(tag=TAG).error(f"结束TTS会话失败: {str(e)}")
                         continue
@@ -350,7 +349,7 @@ class TTSProvider(TTSProviderBase):
 
                             if event == "task-started":
                                 logger.bind(tag=TAG).debug("TTS任务启动成功~")
-                                self.tts_audio_queue.put((SentenceType.FIRST, [], None))
+                                self.queue_audio(SentenceType.FIRST, [], None)
                             elif event == "result-generated":
                                 # 发送缓存的数据
                                 tts_text = self.get_tts_text(self.conn.sentence_id)
@@ -358,9 +357,7 @@ class TTSProvider(TTSProviderBase):
                                     logger.bind(tag=TAG).info(
                                         f"句子语音生成成功： {tts_text}"
                                     )
-                                    self.tts_audio_queue.put(
-                                        (SentenceType.FIRST, [], tts_text)
-                                    )
+                                    self.queue_audio(SentenceType.FIRST, [], tts_text)
                                     self.clear_tts_text(self.conn.sentence_id)
                             elif event == "task-finished":
                                 logger.bind(tag=TAG).debug("TTS任务完成~")

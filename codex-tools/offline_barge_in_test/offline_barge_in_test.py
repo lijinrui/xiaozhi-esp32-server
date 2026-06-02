@@ -42,6 +42,10 @@ class Metrics:
     turn2_first_stt_at: float | None = None
     turn2_first_tts_start_at: float | None = None
     turn2_first_audio_at: float | None = None
+    turn1_id: str | None = None
+    turn2_id: str | None = None
+    stop_turn_id: str | None = None
+    turn_metrics: dict[str, dict[str, Any]] = field(default_factory=dict)
     binary_before_abort: int = 0
     binary_after_abort_before_turn2: int = 0
     binary_after_turn2: int = 0
@@ -87,29 +91,41 @@ async def receiver(ws, metrics: Metrics, state: dict[str, Any]) -> None:
         metrics.messages.append(data)
 
         msg_type = data.get("type")
+        turn_id = data.get("turn_id")
         if msg_type == "hello":
             metrics.hello_at = t
             state["hello"].set()
         elif msg_type == "stt":
             if metrics.turn2_sent_at is None:
                 metrics.first_stt_at = metrics.first_stt_at or t
+                metrics.turn1_id = metrics.turn1_id or turn_id
             else:
                 metrics.turn2_first_stt_at = metrics.turn2_first_stt_at or t
+                metrics.turn2_id = metrics.turn2_id or turn_id
         elif msg_type == "tts":
             tts_state = data.get("state")
             if tts_state == "start":
                 if metrics.turn2_sent_at is None:
                     metrics.first_tts_start_at = metrics.first_tts_start_at or t
-                    state["tts_started"].set()
+                    metrics.turn1_id = metrics.turn1_id or turn_id
                 else:
                     metrics.turn2_first_tts_start_at = metrics.turn2_first_tts_start_at or t
+                    metrics.turn2_id = metrics.turn2_id or turn_id
             elif tts_state == "sentence_start":
-                metrics.first_sentence_at = metrics.first_sentence_at or t
+                if metrics.turn2_sent_at is None:
+                    metrics.first_sentence_at = metrics.first_sentence_at or t
+                    metrics.turn1_id = metrics.turn1_id or turn_id
+                else:
+                    metrics.turn2_first_tts_start_at = metrics.turn2_first_tts_start_at or t
+                    metrics.turn2_id = metrics.turn2_id or turn_id
                 state["tts_started"].set()
             elif tts_state == "stop":
                 if metrics.abort_sent_at is not None and metrics.turn2_sent_at is None:
                     metrics.tts_stop_after_abort_at = metrics.tts_stop_after_abort_at or t
+                    metrics.stop_turn_id = metrics.stop_turn_id or turn_id
                     state["tts_stopped"].set()
+        elif msg_type == "turn_metrics" and turn_id:
+            metrics.turn_metrics[turn_id] = data
 
 
 async def run(args: argparse.Namespace) -> int:
@@ -225,18 +241,93 @@ async def run(args: argparse.Namespace) -> int:
     print(f"turn2 -> STT: {delta_ms(metrics.turn2_sent_at, metrics.turn2_first_stt_at)}")
     print(f"turn2 -> TTS start: {delta_ms(metrics.turn2_sent_at, metrics.turn2_first_tts_start_at)}")
     print(f"turn2 -> first audio: {delta_ms(metrics.turn2_sent_at, metrics.turn2_first_audio_at)}")
+    print(f"turn1_id: {metrics.turn1_id}")
+    print(f"turn2_id: {metrics.turn2_id}")
+    print(f"stop_turn_id: {metrics.stop_turn_id}")
+    print("cancel_reason: offline_barge_in_test")
+    if metrics.stop_turn_id and metrics.stop_turn_id in metrics.turn_metrics:
+        turn_metric = metrics.turn_metrics[metrics.stop_turn_id]
+        print(f"server cancel_reason: {turn_metric.get('cancel_reason')}")
+        print(f"server llm_first_token_ms: {turn_metric.get('llm_first_token_ms')}")
+        print(f"server tts_first_audio_ms: {turn_metric.get('tts_first_audio_ms')}")
+        print(f"server abort_to_stop_ms: {turn_metric.get('abort_to_stop_ms')}")
+        print(f"server stale_packets: {turn_metric.get('stale_packets')}")
     print(f"binary packets before abort: {metrics.binary_before_abort}")
     print(f"binary packets after abort before turn2: {metrics.binary_after_abort_before_turn2}")
     print(f"binary packets after turn2: {metrics.binary_after_turn2}")
 
+    failures: list[str] = []
+
+    abort_to_stop_ms = None
+    if metrics.abort_sent_at is not None and metrics.tts_stop_after_abort_at is not None:
+        abort_to_stop_ms = (metrics.tts_stop_after_abort_at - metrics.abort_sent_at) * 1000
+
+    if metrics.first_sentence_at is None and metrics.first_audio_at is None:
+        failures.append("turn1 did not reach sentence_start/audio")
+    if metrics.tts_stop_after_abort_at is None:
+        failures.append("did not receive tts stop after abort")
+    elif abort_to_stop_ms is not None and abort_to_stop_ms > args.max_abort_to_stop_ms:
+        failures.append(
+            f"abort -> tts stop exceeded limit ({abort_to_stop_ms:.1f}ms > {args.max_abort_to_stop_ms:.1f}ms)"
+        )
+    if metrics.turn2_first_tts_start_at is None and metrics.turn2_first_audio_at is None:
+        failures.append("turn2 did not reach TTS start/audio")
+    if not metrics.turn1_id:
+        failures.append("turn1_id missing from server messages")
+    if not metrics.turn2_id:
+        failures.append("turn2_id missing from server messages")
+    if metrics.turn1_id and metrics.turn2_id and metrics.turn1_id == metrics.turn2_id:
+        failures.append("turn1_id and turn2_id should be different")
+    if metrics.stop_turn_id and metrics.turn1_id and metrics.stop_turn_id != metrics.turn1_id:
+        failures.append("abort stop_turn_id did not match turn1_id")
+    if not metrics.stop_turn_id or metrics.stop_turn_id not in metrics.turn_metrics:
+        failures.append("server turn_metrics missing for interrupted turn")
+    else:
+        turn_metric = metrics.turn_metrics[metrics.stop_turn_id]
+        for field_name in (
+            "turn_id",
+            "cancel_reason",
+            "llm_first_token_ms",
+            "tts_first_audio_ms",
+            "abort_to_stop_ms",
+            "stale_packets",
+        ):
+            if field_name not in turn_metric:
+                failures.append(f"server turn_metrics missing {field_name}")
+        if turn_metric.get("turn_id") != metrics.stop_turn_id:
+            failures.append("server turn_metrics turn_id mismatch")
+        if turn_metric.get("cancel_reason") is None:
+            failures.append("server turn_metrics cancel_reason is empty")
+        server_abort_to_stop = turn_metric.get("abort_to_stop_ms")
+        if (
+            isinstance(server_abort_to_stop, (int, float))
+            and server_abort_to_stop > args.max_abort_to_stop_ms
+        ):
+            failures.append(
+                "server abort_to_stop_ms exceeded limit "
+                f"({server_abort_to_stop:.1f}ms > {args.max_abort_to_stop_ms:.1f}ms)"
+            )
+        server_stale_packets = turn_metric.get("stale_packets")
+        if (
+            isinstance(server_stale_packets, int)
+            and server_stale_packets > args.allowed_stale_packets
+        ):
+            failures.append(
+                "server stale_packets exceeded limit "
+                f"({server_stale_packets} > {args.allowed_stale_packets})"
+            )
     if metrics.binary_after_abort_before_turn2 > args.allowed_stale_packets:
-        print(
-            "FAIL: stale audio packets after abort exceeded limit "
+        failures.append(
+            "stale audio packets after abort exceeded limit "
             f"({metrics.binary_after_abort_before_turn2} > {args.allowed_stale_packets})"
         )
+
+    if failures:
+        for failure in failures:
+            print(f"FAIL: {failure}")
         return 1
 
-    print("PASS: abort path completed within configured stale-audio tolerance.")
+    print("PASS: abort path completed within configured barge-in tolerances.")
     return 0
 
 
@@ -259,6 +350,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gap-after-abort", type=float, default=0.5)
     parser.add_argument("--observe-after-turn2", type=float, default=8.0)
     parser.add_argument("--allowed-stale-packets", type=int, default=2)
+    parser.add_argument("--max-abort-to-stop-ms", type=float, default=500.0)
     return parser.parse_args()
 
 

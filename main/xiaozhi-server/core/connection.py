@@ -121,6 +121,15 @@ class ConnectionHandler:
         self.client_listen_mode = "auto"
         self.tts_start_sent = False
 
+        # 实时对话 turn 管理：用于 abort 后过滤旧 LLM/TTS/tool/audio 迟到输出
+        self.turn_seq = 0
+        self.current_turn_id = None
+        self.cancelled_turn_ids = set()
+        self.turn_metrics = {}
+        self.sentence_turn_map = {}
+        self.active_tool_futures = {}
+        self.turn_lock = threading.Lock()
+
         # 线程任务相关
         self.loop = None  # 在 handle_connection 中获取运行中的事件循环
         self.stop_event = threading.Event()
@@ -202,6 +211,178 @@ class ConnectionHandler:
 
         # 初始化提示词管理器
         self.prompt_manager = PromptManager(self.config, self.logger)
+
+    def begin_turn(self, query=None):
+        """开始新的用户 turn。必须早于 STT/TTS/LLM 输出创建。"""
+        with self.turn_lock:
+            self.turn_seq += 1
+            turn_id = f"{self.session_id}:{self.turn_seq}"
+            now = time.monotonic()
+            self.current_turn_id = turn_id
+            self.client_abort = False
+            self.turn_metrics[turn_id] = {
+                "turn_id": turn_id,
+                "session_id": self.session_id,
+                "query": query,
+                "started_at": now,
+                "llm_first_token_at": None,
+                "tts_first_audio_at": None,
+                "abort_received_at": None,
+                "tts_stop_sent_at": None,
+                "cancel_reason": None,
+                "stale_packets": 0,
+            }
+        self.logger.bind(tag=TAG).info(f"turn start turn_id={turn_id} query={query}")
+        return turn_id
+
+    def cancel_current_turn(self, reason="abort"):
+        """取消当前 turn，并返回被取消的 turn_id。"""
+        with self.turn_lock:
+            turn_id = self.current_turn_id
+            now = time.monotonic()
+            if turn_id:
+                self.cancelled_turn_ids.add(turn_id)
+                metrics = self.turn_metrics.setdefault(turn_id, {"turn_id": turn_id})
+                metrics["abort_received_at"] = now
+                metrics["cancel_reason"] = reason
+                futures = self.active_tool_futures.pop(turn_id, [])
+                self.current_turn_id = None
+            self.client_abort = True
+        for future in futures if turn_id else []:
+            try:
+                future.cancel()
+            except Exception:
+                pass
+        if turn_id:
+            self.logger.bind(tag=TAG).info(
+                f"turn cancel turn_id={turn_id} cancel_reason={reason}"
+            )
+        return turn_id
+
+    def register_sentence_turn(self, sentence_id, turn_id):
+        if sentence_id and turn_id:
+            self.sentence_turn_map[sentence_id] = turn_id
+            if len(self.sentence_turn_map) > 20:
+                oldest = next(iter(self.sentence_turn_map))
+                del self.sentence_turn_map[oldest]
+
+    def get_sentence_turn_id(self, sentence_id):
+        return self.sentence_turn_map.get(sentence_id)
+
+    def is_current_turn(self, turn_id):
+        if turn_id is None:
+            return True
+        return turn_id == self.current_turn_id and turn_id not in self.cancelled_turn_ids
+
+    def is_current_sentence(self, sentence_id, turn_id=None):
+        if sentence_id is not None and sentence_id != self.sentence_id:
+            return False
+        if turn_id is None and sentence_id is not None:
+            turn_id = self.get_sentence_turn_id(sentence_id)
+        return self.is_current_turn(turn_id)
+
+    def mark_llm_first_token(self, turn_id):
+        if turn_id is None:
+            return
+        with self.turn_lock:
+            metrics = self.turn_metrics.get(turn_id)
+            if metrics and metrics.get("llm_first_token_at") is None:
+                metrics["llm_first_token_at"] = time.monotonic()
+
+    def mark_tts_first_audio(self, turn_id):
+        if turn_id is None:
+            return
+        with self.turn_lock:
+            metrics = self.turn_metrics.get(turn_id)
+            if metrics and metrics.get("tts_first_audio_at") is None:
+                metrics["tts_first_audio_at"] = time.monotonic()
+
+    def mark_stale_audio_packet(self, turn_id):
+        if turn_id is None:
+            return
+        with self.turn_lock:
+            metrics = self.turn_metrics.setdefault(turn_id, {"turn_id": turn_id})
+            metrics["stale_packets"] = int(metrics.get("stale_packets") or 0) + 1
+
+    def mark_tts_stop_sent(self, turn_id):
+        if turn_id is None:
+            return
+        with self.turn_lock:
+            metrics = self.turn_metrics.setdefault(turn_id, {"turn_id": turn_id})
+            metrics["tts_stop_sent_at"] = time.monotonic()
+        self.log_turn_metrics(turn_id)
+
+    def register_tool_future(self, turn_id, future):
+        if turn_id is None or future is None:
+            return
+        with self.turn_lock:
+            self.active_tool_futures.setdefault(turn_id, []).append(future)
+
+    def unregister_tool_future(self, turn_id, future):
+        if turn_id is None or future is None:
+            return
+        with self.turn_lock:
+            futures = self.active_tool_futures.get(turn_id)
+            if not futures:
+                return
+            try:
+                futures.remove(future)
+            except ValueError:
+                return
+            if not futures:
+                self.active_tool_futures.pop(turn_id, None)
+
+    def wait_turn_future(self, future, turn_id, timeout, interval=0.05):
+        deadline = time.monotonic() + timeout if timeout is not None else None
+        while True:
+            if self.client_abort or not self.is_current_turn(turn_id):
+                future.cancel()
+                raise concurrent.futures.CancelledError("turn cancelled")
+            try:
+                return future.result(timeout=interval)
+            except concurrent.futures.TimeoutError:
+                if deadline is not None and time.monotonic() >= deadline:
+                    future.cancel()
+                    raise
+
+    def log_turn_metrics(self, turn_id):
+        metrics = self.turn_metrics.get(turn_id)
+        if not metrics:
+            return
+
+        def delta_ms(start, end):
+            if start is None or end is None:
+                return None
+            return round((end - start) * 1000, 1)
+
+        started_at = metrics.get("started_at")
+        abort_at = metrics.get("abort_received_at")
+        stop_at = metrics.get("tts_stop_sent_at")
+        summary = {
+            "turn_id": turn_id,
+            "session_id": self.session_id,
+            "cancel_reason": metrics.get("cancel_reason"),
+            "llm_first_token_ms": delta_ms(started_at, metrics.get("llm_first_token_at")),
+            "tts_first_audio_ms": delta_ms(started_at, metrics.get("tts_first_audio_at")),
+            "abort_to_stop_ms": delta_ms(abort_at, stop_at),
+            "stale_packets": int(metrics.get("stale_packets") or 0),
+        }
+        self.logger.bind(tag=TAG).info(
+            f"turn metrics {json.dumps(summary, ensure_ascii=False)}"
+        )
+        if self.config.get("send_turn_metrics_to_client", False) and self.websocket:
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    self.websocket.send(
+                        json.dumps(
+                            {"type": "turn_metrics", **summary},
+                            ensure_ascii=False,
+                        )
+                    ),
+                    self.loop,
+                )
+            except Exception:
+                pass
 
     async def handle_connection(self, ws: websockets.ServerConnection):
         try:
@@ -959,7 +1140,7 @@ class ConnectionHandler:
         # 更新系统prompt至上下文
         self.dialogue.update_system_message(self.prompt)
 
-    def chat(self, query, depth=0):
+    def chat(self, query, depth=0, turn_id=None):
         # 保存当前任务的sentence_id到局部变量，避免被新任务覆盖
         current_sentence_id = None
 
@@ -968,8 +1149,14 @@ class ConnectionHandler:
 
         # 为最顶层时新建会话ID和发送FIRST请求
         if depth == 0:
+            if turn_id is None:
+                turn_id = self.begin_turn(query)
+            if not self.is_current_turn(turn_id):
+                self.logger.bind(tag=TAG).debug(f"跳过已取消turn chat: {turn_id}")
+                return None
             current_sentence_id = str(uuid.uuid4().hex)
             self.sentence_id = current_sentence_id  # 更新共享属性
+            self.register_sentence_turn(current_sentence_id, turn_id)
             # 如有说话人信息，在消息前加上前缀，让 LLM 知道是谁在说话
             user_content = query
             if getattr(self, "current_speaker", None):
@@ -980,11 +1167,17 @@ class ConnectionHandler:
                     sentence_id=current_sentence_id,
                     sentence_type=SentenceType.FIRST,
                     content_type=ContentType.ACTION,
+                    turn_id=turn_id,
                 )
             )
         else:
             # 递归调用时，使用当前的sentence_id
             current_sentence_id = self.sentence_id
+            if turn_id is None:
+                turn_id = self.get_sentence_turn_id(current_sentence_id)
+            if not self.is_current_turn(turn_id):
+                self.logger.bind(tag=TAG).debug(f"跳过旧turn递归chat: {turn_id}")
+                return None
 
         # 设置最大递归深度，避免无限循环，可根据实际需求调整
         MAX_DEPTH = 5
@@ -1065,7 +1258,7 @@ class ConnectionHandler:
         emotion_flag = True
         try:
             for response in llm_responses:
-                if self.client_abort:
+                if self.client_abort or not self.is_current_turn(turn_id):
                     break
                 if self.intent_type == "function_call" and functions is not None:
                     content, tools_call = response
@@ -1110,6 +1303,7 @@ class ConnectionHandler:
                                     # 清理 delta 中可能泄漏的 JSON 闭合垃圾
                                     new_part = self._clean_response_garbage(new_part)
                                     if new_part:
+                                        self.mark_llm_first_token(turn_id)
                                         tc["_da_sent"] = safe_end
                                         self.tts.tts_text_queue.put(
                                             TTSMessageDTO(
@@ -1117,6 +1311,7 @@ class ConnectionHandler:
                                                 sentence_type=SentenceType.MIDDLE,
                                                 content_type=ContentType.TEXT,
                                                 content_detail=new_part,
+                                                turn_id=turn_id,
                                             )
                                         )
                 else:
@@ -1143,6 +1338,7 @@ class ConnectionHandler:
 
                 if content is not None and len(content) > 0:
                     if not tool_call_flag:
+                        self.mark_llm_first_token(turn_id)
                         response_message.append(content)
                         self.tts.tts_text_queue.put(
                             TTSMessageDTO(
@@ -1150,6 +1346,7 @@ class ConnectionHandler:
                                 sentence_type=SentenceType.MIDDLE,
                                 content_type=ContentType.TEXT,
                                 content_detail=content,
+                                turn_id=turn_id,
                             )
                         )
 
@@ -1161,6 +1358,7 @@ class ConnectionHandler:
                     sentence_type=SentenceType.MIDDLE,
                     content_type=ContentType.TEXT,
                     content_detail=get_system_error_response(self.config),
+                    turn_id=turn_id,
                 )
             )
             if depth == 0:
@@ -1169,9 +1367,13 @@ class ConnectionHandler:
                         sentence_id=current_sentence_id,
                         sentence_type=SentenceType.LAST,
                         content_type=ContentType.ACTION,
+                        turn_id=turn_id,
                     )
                 )
             return
+        if not self.is_current_turn(turn_id):
+            self.logger.bind(tag=TAG).debug(f"LLM流结束后丢弃旧turn: {turn_id}")
+            return None
         # 处理function call
         if tool_call_flag:
             bHasError = False
@@ -1226,12 +1428,14 @@ class ConnectionHandler:
                                             sentence_type=SentenceType.MIDDLE,
                                             content_type=ContentType.TEXT,
                                             content_detail=remaining,
+                                            turn_id=turn_id,
                                         )
                                     )
                             # 写入对话历史
                             da_response = self._clean_response_garbage(da_response)
-                            self.tts.store_tts_text(current_sentence_id, da_response)
-                            self.dialogue.put(Message(role="assistant", content=da_response))
+                            if self.is_current_turn(turn_id):
+                                self.tts.store_tts_text(current_sentence_id, da_response)
+                                self.dialogue.put(Message(role="assistant", content=da_response))
                         # emotion 已经由流式阶段发送，这里记录日志即可
                         if da_emotion:
                             self.logger.bind(tag=TAG).debug(f"direct_answer emotion: {da_emotion}")
@@ -1243,6 +1447,7 @@ class ConnectionHandler:
                                     sentence_id=current_sentence_id,
                                     sentence_type=SentenceType.LAST,
                                     content_type=ContentType.ACTION,
+                                    turn_id=turn_id,
                                 )
                             )
                         return
@@ -1279,6 +1484,7 @@ class ConnectionHandler:
                         ),
                         self.loop,
                     )
+                    self.register_tool_future(turn_id, future)
                     futures_with_data.append((future, tool_call_data, tool_input))
 
                 slow_tool_notice = self.config.get("slow_tool_notice", {}) or {}
@@ -1304,11 +1510,17 @@ class ConnectionHandler:
                             and slow_tool_notice_timeout > 0
                         ):
                             try:
-                                result = future.result(timeout=slow_tool_notice_timeout)
+                                result = self.wait_turn_future(
+                                    future,
+                                    turn_id,
+                                    slow_tool_notice_timeout,
+                                )
                             except concurrent.futures.TimeoutError:
                                 self.logger.bind(tag=TAG).debug(
                                     f"工具调用超过 {slow_tool_notice_timeout:.3f}s，先播提示语"
                                 )
+                                if not self.is_current_turn(turn_id):
+                                    return None
                                 self.tts.tts_one_sentence(
                                     self,
                                     ContentType.TEXT,
@@ -1319,15 +1531,26 @@ class ConnectionHandler:
                                     current_sentence_id, slow_tool_notice_text
                                 )
                                 slow_tool_notice_sent = True
-                                result = future.result(
-                                    timeout=max(tool_call_timeout - slow_tool_notice_timeout, 0.1)
+                                result = self.wait_turn_future(
+                                    future,
+                                    turn_id,
+                                    max(tool_call_timeout - slow_tool_notice_timeout, 0.1),
                                 )
                         else:
-                            result = future.result(timeout=tool_call_timeout)
+                            result = self.wait_turn_future(
+                                future,
+                                turn_id,
+                                tool_call_timeout,
+                            )
                         tool_results.append((result, tool_call_data))
                         # 使用公共方法上报工具调用结果
                         enqueue_tool_report(self, tool_call_data['name'], tool_input, str(result.result) if result.result else None, report_tool_call=False)
 
+                    except concurrent.futures.CancelledError:
+                        self.logger.bind(tag=TAG).debug(
+                            f"工具调用因turn取消而丢弃: {tool_call_data['name']}"
+                        )
+                        return None
                     except Exception as e:
                         self.logger.bind(tag=TAG).error(
                             f"工具调用超时或异常: {tool_call_data['name']}, 错误: {e}"
@@ -1339,25 +1562,33 @@ class ConnectionHandler:
                         ))
                         # 上报工具调用错误
                         enqueue_tool_report(self, tool_call_data['name'], tool_input, str(e), report_tool_call=False)
+                    finally:
+                        self.unregister_tool_future(turn_id, future)
 
                 # 统一处理工具调用结果
-                if tool_results:
+                if tool_results and self.is_current_turn(turn_id):
                     if slow_tool_notice_sent:
                         streamed_text = f"{streamed_text}{slow_tool_notice_text}"
-                    self._handle_function_result(tool_results, depth=depth, streamed_text=streamed_text)
+                    self._handle_function_result(
+                        tool_results,
+                        depth=depth,
+                        streamed_text=streamed_text,
+                        turn_id=turn_id,
+                    )
 
         # 存储对话内容
-        if len(response_message) > 0:
+        if len(response_message) > 0 and self.is_current_turn(turn_id):
             text_buff = "".join(response_message)
             self.tts.store_tts_text(current_sentence_id, text_buff)
             self.dialogue.put(Message(role="assistant", content=text_buff))
 
-        if depth == 0:
+        if depth == 0 and self.is_current_turn(turn_id):
             self.tts.tts_text_queue.put(
                 TTSMessageDTO(
                     sentence_id=current_sentence_id,
                     sentence_type=SentenceType.LAST,
                     content_type=ContentType.ACTION,
+                    turn_id=turn_id,
                 )
             )
             # 使用lambda延迟计算，只有在DEBUG级别时才执行get_llm_dialogue()
@@ -1369,7 +1600,10 @@ class ConnectionHandler:
 
         return True
 
-    def _handle_function_result(self, tool_results, depth, streamed_text=""):
+    def _handle_function_result(self, tool_results, depth, streamed_text="", turn_id=None):
+        if not self.is_current_turn(turn_id):
+            self.logger.bind(tag=TAG).debug(f"丢弃旧turn工具结果: {turn_id}")
+            return
         need_llm_tools = []
         record_tools = []
 
@@ -1385,7 +1619,12 @@ class ConnectionHandler:
                         f"Skipping duplicate TTS for tool {tool_call_data['name']}, already streamed"
                     )
                 else:
-                    self.tts.tts_one_sentence(self, ContentType.TEXT, content_detail=text)
+                    self.tts.tts_one_sentence(
+                        self,
+                        ContentType.TEXT,
+                        content_detail=text,
+                        sentence_id=self.sentence_id,
+                    )
                     self.tts.store_tts_text(self.sentence_id, text)
                 self.dialogue.put(Message(role="assistant", content=text))
             elif result.action == Action.REQLLM:
@@ -1475,7 +1714,7 @@ class ConnectionHandler:
                         )
                     )
 
-            self.chat(None, depth=depth + 1)
+            self.chat(None, depth=depth + 1, turn_id=turn_id)
 
     def _report_worker(self):
         """聊天记录上报工作线程"""

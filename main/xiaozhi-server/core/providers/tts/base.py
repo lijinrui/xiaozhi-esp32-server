@@ -106,6 +106,7 @@ class TTSProviderBase(ABC):
         self.tts_stop_request = False
         self.processed_chars = 0
         self.is_first_sentence = True
+        self.current_turn_id = None
 
     def generate_filename(self, extension=".wav"):
         return os.path.join(
@@ -115,7 +116,48 @@ class TTSProviderBase(ABC):
 
     def handle_opus(self, opus_data: bytes):
         logger.bind(tag=TAG).debug(f"推送数据到队列里面帧数～～ {len(opus_data)}")
-        self.tts_audio_queue.put((SentenceType.MIDDLE, opus_data, None, getattr(self, 'current_sentence_id', None)))
+        self.queue_audio(SentenceType.MIDDLE, opus_data, None)
+
+    def queue_audio(self, sentence_type, audio_datas, text=None, sentence_id=None):
+        if sentence_id is None:
+            sentence_id = getattr(self, "current_sentence_id", None)
+        self.tts_audio_queue.put((sentence_type, audio_datas, text, sentence_id))
+
+    def should_skip_tts_message(self, message):
+        if self.conn.client_abort:
+            logger.bind(tag=TAG).info("收到打断信息，终止TTS文本处理线程")
+            return True
+        if message.turn_id and not self.conn.is_current_turn(message.turn_id):
+            logger.bind(tag=TAG).debug(
+                f"跳过旧turn TTS文本: turn_id={message.turn_id}"
+            )
+            return True
+        if not self.conn.is_current_sentence(message.sentence_id, message.turn_id):
+            return True
+        return False
+
+    def prepare_tts_message(self, message):
+        if self.should_skip_tts_message(message):
+            return False
+        if message.sentence_type == SentenceType.FIRST:
+            self.current_sentence_id = message.sentence_id
+            self.current_turn_id = message.turn_id
+        return True
+
+    def wait_tts_future(self, future, turn_id=None, timeout=None, interval=0.05):
+        deadline = None
+        if timeout is not None:
+            deadline = time.monotonic() + timeout
+        while True:
+            if self.conn.client_abort or not self.conn.is_current_turn(turn_id):
+                future.cancel()
+                raise concurrent.futures.CancelledError("TTS turn cancelled")
+            try:
+                return future.result(timeout=interval)
+            except concurrent.futures.TimeoutError:
+                if deadline is not None and time.monotonic() >= deadline:
+                    future.cancel()
+                    raise
 
     def handle_audio_file(self, file_audio: bytes, text):
         self.before_stop_play_files.append((file_audio, text))
@@ -135,7 +177,7 @@ class TTSProviderBase(ABC):
                     audio_bytes = asyncio.run(self.text_to_speak(text, None))
                     if audio_bytes:
                         # 使用原始文本用于显示/上报
-                        self.tts_audio_queue.put((SentenceType.FIRST, None, original_text, getattr(self, 'current_sentence_id', None)))
+                        self.queue_audio(SentenceType.FIRST, None, original_text)
                         audio_bytes_to_data_stream(
                             audio_bytes,
                             file_type=self.audio_file_type,
@@ -184,7 +226,7 @@ class TTSProviderBase(ABC):
                     logger.bind(tag=TAG).error(
                         f"语音生成失败: {original_text}，请检查网络或服务是否正常"
                     )
-                self.tts_audio_queue.put((SentenceType.FIRST, None, original_text, getattr(self, 'current_sentence_id', None)))
+                self.queue_audio(SentenceType.FIRST, None, original_text)
                 self._process_audio_file_stream(tmp_file, callback=opus_handler)
             except Exception as e:
                 logger.bind(tag=TAG).error(f"Failed to generate TTS file: {e}")
@@ -288,6 +330,7 @@ class TTSProviderBase(ABC):
             else:
                 sentence_id = str(uuid.uuid4().hex)
                 conn.sentence_id = sentence_id
+        turn_id = conn.get_sentence_turn_id(sentence_id)
         # 对于单句的文本，进行分段处理
         segments = re.split(r"([。！？!?；;\n])", content_detail)
         for seg in segments:
@@ -298,6 +341,7 @@ class TTSProviderBase(ABC):
                     content_type=content_type,
                     content_detail=seg,
                     content_file=content_file,
+                    turn_id=turn_id,
                 )
             )
 
@@ -369,14 +413,9 @@ class TTSProviderBase(ABC):
         while not self.conn.stop_event.is_set():
             try:
                 message = self.tts_text_queue.get(timeout=1)
-                if self.conn.client_abort:
-                    logger.bind(tag=TAG).info("收到打断信息，终止TTS文本处理线程")
-                    continue
-                # 过滤旧消息：检查sentence_id是否匹配
-                if message.sentence_id != self.conn.sentence_id:
+                if not self.prepare_tts_message(message):
                     continue
                 if message.sentence_type == SentenceType.FIRST:
-                    self.current_sentence_id = message.sentence_id
                     self.tts_stop_request = False
                     self.processed_chars = 0
                     self.tts_text_buff = []
@@ -396,8 +435,11 @@ class TTSProviderBase(ABC):
                         )
                 if message.sentence_type == SentenceType.LAST:
                     self._process_remaining_text_stream(opus_handler=self.handle_opus)
-                    self.tts_audio_queue.put(
-                        (message.sentence_type, [], message.content_detail, message.sentence_id)
+                    self.queue_audio(
+                        message.sentence_type,
+                        [],
+                        message.content_detail,
+                        message.sentence_id,
                     )
 
             except queue.Empty:
@@ -429,6 +471,12 @@ class TTSProviderBase(ABC):
 
                 if self.conn.client_abort:
                     logger.bind(tag=TAG).debug("收到打断信号，跳过当前音频数据")
+                    enqueue_text, enqueue_audio = None, []
+                    continue
+                if sentence_id and not self.conn.is_current_sentence(sentence_id):
+                    logger.bind(tag=TAG).debug(
+                        f"跳过旧turn音频数据: sentence_id={sentence_id}"
+                    )
                     enqueue_text, enqueue_audio = None, []
                     continue
 
@@ -545,9 +593,9 @@ class TTSProviderBase(ABC):
 
     def _process_before_stop_play_files(self):
         for audio_datas, text in self.before_stop_play_files:
-            self.tts_audio_queue.put((SentenceType.MIDDLE, audio_datas, text, getattr(self, 'current_sentence_id', None)))
+            self.queue_audio(SentenceType.MIDDLE, audio_datas, text)
         self.before_stop_play_files.clear()
-        self.tts_audio_queue.put((SentenceType.LAST, [], None, getattr(self, 'current_sentence_id', None)))
+        self.queue_audio(SentenceType.LAST, [], None)
 
     def _process_remaining_text_stream(
         self, opus_handler: Callable[[bytes], None] = None

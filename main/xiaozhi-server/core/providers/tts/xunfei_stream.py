@@ -159,8 +159,7 @@ class TTSProvider(TTSProviderBase):
                     logger.bind(tag=TAG).info("收到打断信息，终止TTS文本处理线程")
                     continue
 
-                # 过滤旧消息：检查sentence_id是否匹配
-                if message.sentence_id != self.conn.sentence_id:
+                if not self.prepare_tts_message(message):
                     continue
 
                 logger.bind(tag=TAG).debug(
@@ -187,7 +186,7 @@ class TTSProvider(TTSProviderBase):
                             self.start_session(self.conn.sentence_id),
                             loop=self.conn.loop,
                         )
-                        future.result(timeout=self.tts_timeout)
+                        self.wait_tts_future(future, message.turn_id, self.tts_timeout)
                         self.before_stop_play_files.clear()
                         logger.bind(tag=TAG).debug("TTS会话启动成功")
 
@@ -206,7 +205,7 @@ class TTSProvider(TTSProviderBase):
                                 self.text_to_speak(message.content_detail, None),
                                 loop=self.conn.loop,
                             )
-                            future.result(timeout=self.tts_timeout)
+                            self.wait_tts_future(future, message.turn_id, self.tts_timeout)
                         except Exception as e:
                             logger.bind(tag=TAG).error(f"发送TTS文本失败: {str(e)}")
                             # 不使用continue，确保后续处理不被中断
