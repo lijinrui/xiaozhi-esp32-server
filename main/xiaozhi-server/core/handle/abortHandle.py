@@ -6,10 +6,10 @@ if TYPE_CHECKING:
 TAG = __name__
 
 
-async def handleAbortMessage(conn: "ConnectionHandler"):
-    conn.logger.bind(tag=TAG).info("Abort message received")
+async def handleAbortMessage(conn: "ConnectionHandler", reason: str = "client_abort"):
+    conn.logger.bind(tag=TAG).info(f"Abort message received, reason={reason}")
     # 设置成打断状态，会自动打断llm、tts任务
-    turn_id = conn.cancel_current_turn("client_abort")
+    turn_id = conn.cancel_current_turn(reason)
     conn.close_after_chat = False
     conn.clear_queues()
     # 打断客户端说话状态

@@ -8,6 +8,10 @@ if TYPE_CHECKING:
 from core.utils.util import audio_to_data
 from core.handle.abortHandle import handleAbortMessage
 from core.handle.intentHandler import handle_user_intent
+from core.voice.interrupt_classifier import (
+    InterruptDecision,
+    RuleBasedInterruptClassifier,
+)
 from plugins_func.functions.recording_mode import (
     append_recording,
     exit_recording_mode,
@@ -24,6 +28,7 @@ from core.utils.output_counter import check_device_output_limit
 from core.handle.sendAudioHandle import send_display_message, send_stt_message, SentenceType
 
 TAG = __name__
+INTERRUPT_CLASSIFIER = RuleBasedInterruptClassifier()
 
 
 async def handleAudioMessage(conn: "ConnectionHandler", audio):
@@ -92,19 +97,38 @@ async def startToChat(conn: "ConnectionHandler", text):
 
     # manual 模式下不打断正在播放的内容；部分流式ASR也可配置为播放中继续识别/送LLM
     interrupt_tts_on_segment = True
+    enable_interrupt_classifier = True
     try:
         selected_asr = conn.config.get("selected_module", {}).get("ASR")
         asr_config = conn.config.get("ASR", {}).get(selected_asr, {})
         interrupt_tts_on_segment = asr_config.get("interrupt_tts_on_segment", True)
+        enable_interrupt_classifier = asr_config.get("enable_interrupt_classifier", True)
     except Exception:
         interrupt_tts_on_segment = True
+        enable_interrupt_classifier = True
 
     if (
         conn.client_is_speaking
         and conn.client_listen_mode != "manual"
         and interrupt_tts_on_segment
     ):
-        await handleAbortMessage(conn)
+        if enable_interrupt_classifier:
+            interrupt = INTERRUPT_CLASSIFIER.classify(
+                is_speaking=True,
+                text=actual_text,
+                is_final=True,
+            )
+            conn.logger.bind(tag=TAG).info(
+                f"播放中ASR分段打断判断: decision={interrupt.decision.value}, "
+                f"reason={interrupt.reason}, text={actual_text}"
+            )
+            if interrupt.decision == InterruptDecision.IGNORE:
+                return
+            if interrupt.decision == InterruptDecision.SOFT_INTERRUPT:
+                return
+            await handleAbortMessage(conn, reason=f"hard_interrupt:{interrupt.reason}")
+        else:
+            await handleAbortMessage(conn)
     elif conn.client_is_speaking and conn.client_listen_mode != "manual":
         conn.logger.bind(tag=TAG).info("播放中收到新的ASR分段，继续送入LLM，不打断当前TTS")
 
