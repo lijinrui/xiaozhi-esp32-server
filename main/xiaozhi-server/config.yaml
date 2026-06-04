@@ -67,6 +67,11 @@ tool_call_timeout: 30
 # abort 时取消当前 turn，并过滤旧 turn 的 LLM/TTS/tool/audio 迟到输出。
 # 如果线上客户端或第三方 provider 对新增 turn_id/取消行为不兼容，可在 data/.config.yaml 中设为 false 临时回退旧行为。
 enable_turn_guard: true
+# LLM 流式文本进入 TTS 前的切分策略，避免 token 过碎导致半句话过早播出
+tts_chunk_first_min_chars: 8
+tts_chunk_first_max_chars: 20
+tts_chunk_first_max_wait_ms: 250
+tts_chunk_max_chars: 60
 # 开启唤醒词加速
 enable_wakeup_words_response_cache: true
 # 开场是否回复唤醒词

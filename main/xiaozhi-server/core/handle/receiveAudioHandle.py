@@ -22,6 +22,7 @@ RECORDING_EXIT_FALLBACK_KEYWORDS = (
 )
 from core.utils.output_counter import check_device_output_limit
 from core.handle.sendAudioHandle import send_display_message, send_stt_message, SentenceType
+from core.voice.interrupt_classifier import InterruptClassifier
 
 TAG = __name__
 
@@ -104,7 +105,22 @@ async def startToChat(conn: "ConnectionHandler", text):
         and conn.client_listen_mode != "manual"
         and interrupt_tts_on_segment
     ):
-        await handleAbortMessage(conn)
+        wake_words = conn.config.get("wakeup_words", [])
+        decision = InterruptClassifier().classify(
+            playback_state="speaking",
+            asr_final=actual_text,
+            wake_word=any(word in actual_text for word in wake_words),
+            current_turn_id=conn.current_turn_id,
+        )
+        conn.logger.bind(tag=TAG).info(
+            f"播放中插话判定: action={decision.action}, reason={decision.reason}, text={actual_text}"
+        )
+        if decision.action == "hard_interrupt":
+            await handleAbortMessage(conn)
+        elif decision.action == "ignore":
+            return
+        else:
+            return
     elif conn.client_is_speaking and conn.client_listen_mode != "manual":
         conn.logger.bind(tag=TAG).info("播放中收到新的ASR分段，继续送入LLM，不打断当前TTS")
 

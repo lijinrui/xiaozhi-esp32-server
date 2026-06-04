@@ -24,5 +24,6 @@ async def handleAbortMessage(conn: "ConnectionHandler"):
         )
     )
     conn.mark_tts_stop_sent(turn_id)
+    conn.commit_spoken_history(turn_id)
     conn.clearSpeakStatus()
     conn.logger.bind(tag=TAG).info("Abort message received-end")

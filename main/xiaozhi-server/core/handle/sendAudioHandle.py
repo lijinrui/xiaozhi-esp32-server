@@ -34,6 +34,7 @@ async def sendAudioMessage(conn: "ConnectionHandler", sentenceType, audios, text
             await _send_tts_start_padding(conn)
 
     if sentenceType == SentenceType.FIRST:
+        conn.mark_tts_chunk_sent(turn_id, text)
         # 同一句子的后续消息加入流控队列，其他情况立即发送
         if (
             hasattr(conn, "audio_rate_controller")
