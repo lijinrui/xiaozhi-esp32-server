@@ -1,2 +1,1 @@
-"""Voice interaction state helpers."""
-
+"""Internal realtime voice pipeline helpers."""
