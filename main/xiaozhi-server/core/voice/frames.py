@@ -1,7 +1,7 @@
-"""Internal voice pipeline frames.
+"""服务端内部语音流水线事件帧。
 
-These frames are server-internal only. They do not change the ESP32 websocket
-protocol; they give turn/interruption decisions a typed lifecycle.
+这些帧只在服务端内部使用，不改变 ESP32 websocket 协议。
+它们用于给 turn 管理和插话打断决策提供类型化的生命周期。
 """
 
 from __future__ import annotations
@@ -47,4 +47,3 @@ class InterruptionFrame(VoiceFrame):
 class TurnCancelFrame(VoiceFrame):
     cancelled_turn_id: str | None = None
     reason: str = "unknown"
-

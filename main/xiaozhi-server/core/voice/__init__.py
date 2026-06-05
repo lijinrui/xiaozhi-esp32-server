@@ -1,1 +1,1 @@
-"""Internal realtime voice pipeline helpers."""
+"""服务端实时语音流水线的内部工具。"""

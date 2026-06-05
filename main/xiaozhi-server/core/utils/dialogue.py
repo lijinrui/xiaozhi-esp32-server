@@ -128,9 +128,22 @@ class Dialogue:
         # 第三段：动态上下文 system prompt（时间、记忆、说话人等）
         # 保持 system 角色以确保模型权威性，不降级为 user
         if system_message and dynamic_part:
+            from core.utils.current_time import (
+                get_current_date,
+                get_current_lunar_date,
+                get_current_weekday,
+            )
+
             # 替换时间占位符
             dynamic_part = dynamic_part.replace(
                 "{{current_time}}", datetime.now().strftime("%H:%M")
+            )
+            dynamic_part = dynamic_part.replace("{{today_date}}", get_current_date())
+            dynamic_part = dynamic_part.replace(
+                "{{today_weekday}}", get_current_weekday()
+            )
+            dynamic_part = dynamic_part.replace(
+                "{{lunar_date}}", get_current_lunar_date()
             )
 
             # 填充记忆

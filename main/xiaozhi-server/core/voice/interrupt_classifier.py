@@ -1,4 +1,4 @@
-"""Interruption classifier for speaking-time user input."""
+"""播放中用户输入的插话打断分类器。"""
 
 from __future__ import annotations
 
@@ -29,11 +29,10 @@ class InterruptResult:
 
 
 class RuleBasedInterruptClassifier:
-    """Provider-agnostic interruption classifier.
+    """不依赖具体 ASR/TTS 服务商的规则分类器。
 
-    The first version is deliberately conservative: explicit corrections and
-    questions cancel immediately, backchannels are ignored, short ambiguous
-    speech becomes a soft interruption candidate.
+    这版规则刻意偏保守：明确纠正和明显问题会立即打断，
+    附和词会被忽略，短而模糊的插话会先作为软打断候选。
     """
 
     def __init__(self, start_strategy: RuleBasedTurnStartStrategy | None = None):
@@ -65,10 +64,10 @@ class LegacyInterruptDecision:
 
 
 class InterruptClassifier:
-    """Compatibility wrapper for older tests and call sites.
+    """旧测试和旧调用点使用的兼容包装。
 
-    New code should use RuleBasedInterruptClassifier, which returns enum-based
-    InterruptResult objects. The older API returns string actions.
+    新代码应直接使用 RuleBasedInterruptClassifier，它返回枚举形式的
+    InterruptResult；旧接口仍返回字符串 action。
     """
 
     def __init__(self, classifier: RuleBasedInterruptClassifier | None = None):

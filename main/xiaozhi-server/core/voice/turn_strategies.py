@@ -1,4 +1,4 @@
-"""Turn start strategies for realtime voice interruption decisions."""
+"""实时语音插话打断的 turn 开始判定规则。"""
 
 from __future__ import annotations
 
@@ -37,6 +37,7 @@ BACKCHANNEL_WORDS = {
 
 EXPLICIT_INTERRUPT_PHRASES = (
     "停一下",
+    "停一",
     "停下",
     "停止",
     "暂停",
@@ -87,10 +88,10 @@ def contains_any(text: str, phrases: tuple[str, ...]) -> str | None:
 
 
 class RuleBasedTurnStartStrategy:
-    """Small deterministic strategy for barge-in turn starts.
+    """用于判断是否开始新 turn 的轻量确定性规则。
 
-    It intentionally avoids provider-specific assumptions. Partial/final ASR
-    text can both pass through this strategy.
+    这里刻意不绑定任何 ASR 服务商的细节；中间识别和最终识别文本
+    都可以交给这套规则判定。
     """
 
     def __init__(self, min_candidate_chars: int = 2, min_start_chars: int = 4):
@@ -126,7 +127,6 @@ class RuleBasedTurnStartStrategy:
             return TurnStartResult(TurnStartDecision.START, "question_like")
 
         if is_final and len(normalized) >= self.min_start_chars:
-            return TurnStartResult(TurnStartDecision.START, "final_enough")
+            return TurnStartResult(TurnStartDecision.CANDIDATE, "final_enough")
 
         return TurnStartResult(TurnStartDecision.CANDIDATE, "short_candidate")
-

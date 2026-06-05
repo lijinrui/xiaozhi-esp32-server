@@ -1,0 +1,622 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>播放中插话打断流式 E2E 测试报告</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --ink: #1f2933;
+      --muted: #667085;
+      --line: #d9dee7;
+      --green: #13795b;
+      --green-bg: #e8f5ef;
+      --red: #b42318;
+      --red-bg: #fff0ee;
+      --amber: #98690c;
+      --amber-bg: #fff6df;
+      --blue: #175cd3;
+      --blue-bg: #edf4ff;
+      --purple: #6941c6;
+      --purple-bg: #f4f0ff;
+      --shadow: 0 10px 30px rgba(31, 41, 51, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      line-height: 1.55;
+    }
+
+    main {
+      max-width: 1220px;
+      margin: 0 auto;
+      padding: 28px 24px 48px;
+    }
+
+    header {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 20px;
+      align-items: end;
+      margin-bottom: 22px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 0;
+    }
+
+    code {
+      padding: 2px 5px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: #f8fafc;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.92em;
+    }
+
+    pre {
+      margin: 0;
+      overflow-x: auto;
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #111827;
+      color: #f9fafb;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    pre code {
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      font-size: inherit;
+    }
+
+    .subtitle {
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .timestamp {
+      min-width: 220px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--panel);
+      color: var(--muted);
+      font-size: 13px;
+      text-align: right;
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin: 18px 0 22px;
+    }
+
+    .metric {
+      min-height: 106px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    .metric .label {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .metric .value {
+      margin-top: 8px;
+      font-size: 30px;
+      font-weight: 750;
+      line-height: 1;
+    }
+
+    .metric .note {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .panel {
+      margin-top: 14px;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    .callout {
+      display: grid;
+      grid-template-columns: 12px 1fr;
+      gap: 12px;
+      align-items: stretch;
+      padding: 14px;
+      border: 1px solid #f3b5ad;
+      border-radius: 8px;
+      background: var(--red-bg);
+    }
+
+    .callout::before {
+      content: "";
+      width: 12px;
+      border-radius: 6px;
+      background: var(--red);
+    }
+
+    .callout strong {
+      color: var(--red);
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 650;
+      white-space: nowrap;
+    }
+
+    .pill.ok {
+      background: var(--green-bg);
+      color: var(--green);
+    }
+
+    .pill.fail {
+      background: var(--red-bg);
+      color: var(--red);
+    }
+
+    .pill.soft {
+      background: var(--purple-bg);
+      color: var(--purple);
+    }
+
+    .pill.hard {
+      background: var(--blue-bg);
+      color: var(--blue);
+    }
+
+    .pill.none {
+      background: #eef1f5;
+      color: #475467;
+    }
+
+    .pill.warn {
+      background: var(--amber-bg);
+      color: var(--amber);
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 1080px;
+      font-size: 13px;
+    }
+
+    th,
+    td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: #f2f4f7;
+      color: #344054;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    tbody tr:hover {
+      background: #fbfcff;
+    }
+
+    tbody tr.failed {
+      background: #fff8f7;
+    }
+
+    .case-id {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+      color: #344054;
+      white-space: nowrap;
+    }
+
+    .recognized {
+      min-width: 150px;
+      font-weight: 650;
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    .num {
+      text-align: right;
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .mode-cell {
+      text-align: center;
+      white-space: nowrap;
+    }
+
+    .yes {
+      color: var(--green);
+      font-weight: 750;
+    }
+
+    .no {
+      color: var(--muted);
+    }
+
+    .sections {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+
+    ul {
+      margin: 8px 0 0;
+      padding-left: 20px;
+    }
+
+    li + li {
+      margin-top: 6px;
+    }
+
+    .footer-note {
+      margin-top: 18px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    @media (max-width: 860px) {
+      main {
+        padding: 20px 14px 34px;
+      }
+
+      header {
+        grid-template-columns: 1fr;
+      }
+
+      .timestamp {
+        text-align: left;
+      }
+
+      .summary-grid,
+      .sections {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>播放中插话打断流式 E2E 测试报告</h1>
+        <p class="subtitle">每 60ms 将音频帧送入 SherpaASRStream，记录流式识别文本、打断判定和触发位置。</p>
+      </div>
+      <div class="timestamp">
+        测试时间：2026-06-05 17:00<br>
+        ASR：SherpaASRStream<br>
+        音频目录：<code>tmp/barge_in_audio</code>
+      </div>
+    </header>
+
+    <section class="summary-grid" aria-label="核心指标">
+      <div class="metric">
+        <div class="label">通过用例</div>
+        <div class="value">11 / 12</div>
+        <div class="note">仅 <code>explicit_stop</code> 未符合预期</div>
+      </div>
+      <div class="metric">
+        <div class="label">ASR 计算耗时范围</div>
+        <div class="value">32-87ms</div>
+        <div class="note">离线跑完整条音频的计算耗时</div>
+      </div>
+      <div class="metric">
+        <div class="label">规则判定耗时</div>
+        <div class="value">&lt; 0.2ms</div>
+        <div class="note">微秒级，基本可忽略</div>
+      </div>
+      <div class="metric">
+        <div class="label">最快打断位置</div>
+        <div class="value">419ms</div>
+        <div class="note"><code>那个</code> 在 sensitive 下触发</div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>关键发现</h2>
+      <div class="callout">
+        <p>
+          <strong>短打断词存在流式识别截短风险。</strong>
+          用例 <code>explicit_stop</code> 的原始语音是“停一下”，但流式 ASR 输出为“停一”。
+          当前 <code>normal</code> 只识别完整明确打断词，因此没有触发打断；
+          <code>sensitive</code> 会把它作为软打断候选处理并触发打断。
+        </p>
+      </div>
+      <div class="legend">
+        <span class="pill hard">hard_interrupt：明确打断</span>
+        <span class="pill soft">soft_interrupt：疑似插话</span>
+        <span class="pill none">ignore：忽略</span>
+        <span class="pill ok">OK：符合预期</span>
+        <span class="pill fail">FAIL：不符合预期</span>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>耗时口径</h2>
+      <div class="sections">
+        <div>
+          <p><strong>ASR 计算耗时</strong></p>
+          <p class="muted">脚本离线跑完整条音频的计算耗时，不等同于用户实际等待时间。它主要用于比较 ASR 本身处理一条样本的计算成本。</p>
+        </div>
+        <div>
+          <p><strong>首次打断位置</strong></p>
+          <p class="muted">音频时间轴上第一次触发打断的位置，更接近真实体验。例如 <code>normal:660ms</code> 表示用户开始说话约 660ms 后 normal 模式会触发打断。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>结果明细</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>用例</th>
+              <th>分组</th>
+              <th>流式识别文本</th>
+              <th>判定</th>
+              <th>原因</th>
+              <th class="mode-cell">off</th>
+              <th class="mode-cell">normal</th>
+              <th class="mode-cell">sensitive</th>
+              <th class="num">ASR计算耗时</th>
+              <th class="num">规则耗时</th>
+              <th>首次打断位置</th>
+              <th>结果</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="case-id">backchannel_um</td>
+              <td>附和词</td>
+              <td class="recognized">嗯</td>
+              <td><span class="pill none">ignore</span></td>
+              <td>backchannel</td>
+              <td class="mode-cell no">否</td>
+              <td class="mode-cell no">否</td>
+              <td class="mode-cell no">否</td>
+              <td class="num">34.6ms</td>
+              <td class="num">160.88us</td>
+              <td>-</td>
+              <td><span class="pill ok">OK</span></td>
+            </tr>
+            <tr>
+              <td class="case-id">backchannel_ok</td>
+              <td>附和词</td>
+              <td class="recognized">好的</td>
+              <td><span class="pill none">ignore</span></td>
+              <td>backchannel</td>
+              <td class="mode-cell no">否</td>
+              <td class="mode-cell no">否</td>
+              <td class="mode-cell no">否</td>
+              <td class="num">35.6ms</td>
+              <td class="num">19.58us</td>
+              <td>-</td>
+              <td><span class="pill ok">OK</span></td>
+            </tr>
+            <tr>
+              <td class="case-id">noise_placeholder</td>
+              <td>噪声占位</td>
+              <td class="recognized">咳嗽</td>
+              <td><span class="pill none">ignore</span></td>
+              <td>noise_placeholder</td>
+              <td class="mode-cell no">否</td>
+              <td class="mode-cell no">否</td>
+              <td class="mode-cell no">否</td>
+              <td class="num">34.9ms</td>
+              <td class="num">20.08us</td>
+              <td>-</td>
+              <td><span class="pill ok">OK</span></td>
+            </tr>
+            <tr class="failed">
+              <td class="case-id">explicit_stop</td>
+              <td>明确叫停</td>
+              <td class="recognized">停一</td>
+              <td><span class="pill soft">soft_interrupt</span></td>
+              <td>short_candidate</td>
+              <td class="mode-cell no">否</td>
+              <td class="mode-cell no">否</td>
+              <td class="mode-cell yes">是</td>
+              <td class="num">32.1ms</td>
+              <td class="num">23.54us</td>
+              <td><span class="pill warn">sensitive:565ms</span></td>
+              <td><span class="pill fail">FAIL</span></td>
+            </tr>
+            <tr>
+              <td class="case-id">explicit_wait</td>
+              <td>明确叫停</td>
+              <td class="recognized">等等我重新问</td>
+              <td><span class="pill hard">hard_interrupt</span></td>
+              <td>explicit_interrupt:等等</td>
+              <td class="mode-cell no">否</td>
+              <td class="mode-cell yes">是</td>
+              <td class="mode-cell yes">是</td>
+              <td class="num">70.3ms</td>
+              <td class="num">9.40us</td>
+              <td>normal:660ms, sensitive:660ms</td>
+              <td><span class="pill ok">OK</span></td>
+            </tr>
+            <tr>
+              <td class="case-id">correction_wrong_target</td>
+              <td>纠正前文</td>
+              <td class="recognized">不是这个我问的是天气</td>
+              <td><span class="pill hard">hard_interrupt</span></td>
+              <td>explicit_interrupt:不是</td>
+              <td class="mode-cell no">否</td>
+              <td class="mode-cell yes">是</td>
+              <td class="mode-cell yes">是</td>
+              <td class="num">87.4ms</td>
+              <td class="num">9.09us</td>
+              <td>normal:660ms, sensitive:660ms</td>
+              <td><span class="pill ok">OK</span></td>
+            </tr>
+            <tr>
+              <td class="case-id">question_weather</td>
+              <td>明显新问题</td>
+              <td class="recognized">那明天天气怎么样</td>
+              <td><span class="pill hard">hard_interrupt</span></td>
+              <td>question_like</td>
+              <td class="mode-cell no">否</td>
+              <td class="mode-cell yes">是</td>
+              <td class="mode-cell yes">是</td>
+              <td class="num">70.6ms</td>
+              <td class="num">9.76us</td>
+              <td>normal:1319ms, sensitive:660ms</td>
+              <td><span class="pill ok">OK</span></td>
+            </tr>
+            <tr>
+              <td class="case-id">question_rephrase</td>
+              <td>明显新问题</td>
+              <td class="recognized">能不能换一种说法</td>
+              <td><span class="pill hard">hard_interrupt</span></td>
+              <td>question_like</td>
+              <td class="mode-cell no">否</td>
+              <td class="mode-cell yes">是</td>
+              <td class="mode-cell yes">是</td>
+              <td class="num">67.2ms</td>
+              <td class="num">9.39us</td>
+              <td>normal:1260ms, sensitive:660ms</td>
+              <td><span class="pill ok">OK</span></td>
+            </tr>
+            <tr>
+              <td class="case-id">wake_word</td>
+              <td>唤醒词</td>
+              <td class="recognized">小智小智</td>
+              <td><span class="pill hard">hard_interrupt</span></td>
+              <td>wake_word</td>
+              <td class="mode-cell no">否</td>
+              <td class="mode-cell yes">是</td>
+              <td class="mode-cell yes">是</td>
+              <td class="num">49.2ms</td>
+              <td class="num">9.58us</td>
+              <td>normal:660ms, sensitive:660ms</td>
+              <td><span class="pill ok">OK</span></td>
+            </tr>
+            <tr>
+              <td class="case-id">hesitation_short_partial</td>
+              <td>短疑似插话</td>
+              <td class="recognized">那个</td>
+              <td><span class="pill soft">soft_interrupt</span></td>
+              <td>short_candidate</td>
+              <td class="mode-cell no">否</td>
+              <td class="mode-cell no">否</td>
+              <td class="mode-cell yes">是</td>
+              <td class="num">32.2ms</td>
+              <td class="num">20.46us</td>
+              <td>sensitive:419ms</td>
+              <td><span class="pill ok">OK</span></td>
+            </tr>
+            <tr>
+              <td class="case-id">ordinary_final_pause</td>
+              <td>普通停顿前半句</td>
+              <td class="recognized">我觉得这个回答还可以</td>
+              <td><span class="pill soft">soft_interrupt</span></td>
+              <td>final_enough</td>
+              <td class="mode-cell no">否</td>
+              <td class="mode-cell no">否</td>
+              <td class="mode-cell yes">是</td>
+              <td class="num">85.4ms</td>
+              <td class="num">7.03us</td>
+              <td>sensitive:660ms</td>
+              <td><span class="pill ok">OK</span></td>
+            </tr>
+            <tr>
+              <td class="case-id">ordinary_final_environment</td>
+              <td>普通陈述</td>
+              <td class="recognized">今天外面声音有点大</td>
+              <td><span class="pill soft">soft_interrupt</span></td>
+              <td>final_enough</td>
+              <td class="mode-cell no">否</td>
+              <td class="mode-cell no">否</td>
+              <td class="mode-cell yes">是</td>
+              <td class="num">70.3ms</td>
+              <td class="num">9.14us</td>
+              <td>sensitive:660ms</td>
+              <td><span class="pill ok">OK</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>复现命令</h2>
+      <pre><code>main/xiaozhi-server/venv/bin/python main/xiaozhi-server/performance_tester/performance_tester_barge_in_e2e.py \
+  --asr SherpaASRStream \
+  --stream \
+  --frame-ms 60 \
+  --repeat 1</code></pre>
+      <p class="footer-note">重新生成测试音频时增加 <code>--generate-audio</code>。</p>
+    </section>
+  </main>
+</body>
+</html>

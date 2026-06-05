@@ -35,6 +35,27 @@ class TurnManagerTest(unittest.TestCase):
         self.assertEqual(metrics["dropped_tool_results"], 1)
         self.assertEqual(manager.get_spoken_commit(turn_id), "第一步。")
 
+    def test_tool_timing_markers(self):
+        manager = TurnManager("session")
+        turn_id = manager.begin_turn("明天黄历")
+
+        manager.mark_tool_choice(turn_id, ["get_lunar"])
+        manager.mark_tool_choice(turn_id, ["get_lunar", "hass_get_state"])
+        manager.mark_tool_call_started(turn_id)
+        manager.mark_tool_result(turn_id)
+        manager.mark_tool_result_llm_started(turn_id)
+        manager.mark_tool_result_llm_first_delta(turn_id)
+        manager.mark_tool_result_llm_first_token(turn_id)
+
+        metrics = manager.get_turn_metrics(turn_id)
+        self.assertEqual(metrics["tool_names"], ["get_lunar", "hass_get_state"])
+        self.assertIsNotNone(metrics["tool_choice_at"])
+        self.assertIsNotNone(metrics["tool_call_started_at"])
+        self.assertIsNotNone(metrics["tool_result_at"])
+        self.assertIsNotNone(metrics["tool_result_llm_started_at"])
+        self.assertIsNotNone(metrics["tool_result_llm_first_delta_at"])
+        self.assertIsNotNone(metrics["tool_result_llm_first_token_at"])
+
     def test_disabled_manager_is_transparent(self):
         manager = TurnManager("session", enabled=False)
         self.assertIsNone(manager.begin_turn("hello"))
@@ -43,4 +64,3 @@ class TurnManagerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -1,5 +1,6 @@
 """服务端插件工具执行器"""
 
+from copy import deepcopy
 from typing import Dict, Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -80,6 +81,7 @@ class ServerPluginExecutor(ToolExecutor):
         for func_name in all_required_functions:
             func_item = all_function_registry.get(func_name)
             if func_item:
+                func_description = deepcopy(func_item.description)
                 # 从函数注册中获取描述
                 fun_description = (
                     self.config.get("plugins", {})
@@ -87,26 +89,26 @@ class ServerPluginExecutor(ToolExecutor):
                     .get("description", "")
                 )
                 if fun_description is not None and len(fun_description) > 0:
-                    if "function" in func_item.description and isinstance(
-                        func_item.description["function"], dict
+                    if "function" in func_description and isinstance(
+                        func_description["function"], dict
                     ):
-                        func_item.description["function"][
+                        func_description["function"][
                             "description"
                         ] = fun_description
 
                 # 新闻插件：根据配置更新新闻源参数描述
                 if func_name == "get_news_from_newsnow":
-                    self._init_news_source_description(func_item, func_name)
+                    self._init_news_source_description(func_description, func_name)
 
                 if func_name == "switch_llm":
-                    self._init_switch_llm_description(func_item)
+                    self._init_switch_llm_description(func_description)
 
                 if func_name in ("hass_get_state", "hass_set_state"):
-                    self._init_hass_entity_id_enum(func_item)
+                    self._init_hass_entity_id_enum(func_description)
 
                 tools[func_name] = ToolDefinition(
                     name=func_name,
-                    description=func_item.description,
+                    description=func_description,
                     tool_type=ToolType.SERVER_PLUGIN,
                 )
 
@@ -116,7 +118,7 @@ class ServerPluginExecutor(ToolExecutor):
         """检查是否有指定的服务端插件工具"""
         return tool_name in all_function_registry
 
-    def _init_news_source_description(self, func_item, func_name):
+    def _init_news_source_description(self, description, func_name):
         """根据连接配置初始化新闻工具的参数描述"""
         news_sources = (
             self.config.get("plugins", {})
@@ -127,13 +129,13 @@ class ServerPluginExecutor(ToolExecutor):
             news_sources = "澎湃新闻;百度热搜;财联社"
         sources_str = news_sources.replace(";", "、")
         try:
-            func_item.description["function"]["parameters"]["properties"]["source"][
+            description["function"]["parameters"]["properties"]["source"][
                 "description"
             ] = f"新闻源的标准中文名称，例如{sources_str}等。可选参数，如果不提供则使用默认新闻源"
         except (KeyError, TypeError):
             pass
 
-    def _init_switch_llm_description(self, func_item):
+    def _init_switch_llm_description(self, description):
         """根据当前 LLM 配置补充可切换模型和别名，让 LLM 直接从配置 key 中选择最接近的。"""
         try:
             from plugins_func.functions.switch_llm import (
@@ -158,20 +160,20 @@ class ServerPluginExecutor(ToolExecutor):
                 f"可选模型及别名：{options}"
             )
 
-            func_item.description["function"]["description"] += choice_instruction
-            func_item.description["function"]["parameters"]["properties"]["model_name"][
+            description["function"]["description"] += choice_instruction
+            description["function"]["parameters"]["properties"]["model_name"][
                 "description"
             ] += choice_instruction
 
             # 加 enum 硬约束，强制 LLM 只能从配置 key 里选（主流 function calling 均支持）
             if enum_keys:
-                func_item.description["function"]["parameters"]["properties"]["model_name"][
+                description["function"]["parameters"]["properties"]["model_name"][
                     "enum"
                 ] = enum_keys
         except Exception:
             pass
 
-    def _init_hass_entity_id_enum(self, func_item):
+    def _init_hass_entity_id_enum(self, description):
         """从 home_assistant 配置中提取 entity_id 列表，注入到 entity_id 参数的 enum 中，防止模型瞎猜。"""
         try:
             plugins = self.config.get("plugins", {})
@@ -189,7 +191,7 @@ class ServerPluginExecutor(ToolExecutor):
             if not entity_ids:
                 return
             # 注入 enum
-            params = func_item.description["function"]["parameters"]["properties"]
+            params = description["function"]["parameters"]["properties"]
             if "entity_id" in params:
                 params["entity_id"]["enum"] = entity_ids
                 params["entity_id"][

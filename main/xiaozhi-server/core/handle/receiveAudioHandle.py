@@ -75,7 +75,7 @@ async def startToChat(conn: "ConnectionHandler", text):
                 speech_content = data["content"]
                 conn.logger.bind(tag=TAG).info(f"解析到说话人信息: {speaker_name}")
 
-                # actual_text 已经是 data["content"]（纯文本），保留 speaker 信息到 conn
+                # 当前文本已经是 data["content"]（纯文本），保留 speaker 信息到 conn
     except (json.JSONDecodeError, KeyError):
         # 如果解析失败，继续使用原始文本
         pass
@@ -99,60 +99,54 @@ async def startToChat(conn: "ConnectionHandler", text):
             await max_out_size(conn)
             return
 
-    # manual 模式下不打断正在播放的内容。
-    # barge_in_mode:
+    # 手动监听模式下不打断正在播放的内容。
+    # 播放中插话模式：
     #   off: 播放中不打断
     #   normal: 只有明确插话才打断
     #   sensitive: 可疑插话也打断
     barge_in_mode = BARGE_IN_MODE_NORMAL
-    interrupt_tts_on_segment = True
-    enable_interrupt_classifier = True
+    should_interrupt_playback = True
     interrupt_soft_as_hard = False
     try:
         selected_asr = conn.config.get("selected_module", {}).get("ASR")
         asr_config = conn.config.get("ASR", {}).get(selected_asr, {})
         (
             barge_in_mode,
-            interrupt_tts_on_segment,
-            enable_interrupt_classifier,
+            should_interrupt_playback,
             interrupt_soft_as_hard,
         ) = resolve_barge_in_config(asr_config)
     except Exception:
         barge_in_mode = BARGE_IN_MODE_NORMAL
-        interrupt_tts_on_segment = True
-        enable_interrupt_classifier = True
+        should_interrupt_playback = True
         interrupt_soft_as_hard = False
 
     if (
         conn.client_is_speaking
         and conn.client_listen_mode != "manual"
-        and interrupt_tts_on_segment
+        and should_interrupt_playback
     ):
-        if enable_interrupt_classifier:
-            wake_words = conn.config.get("wakeup_words", [])
-            interrupt = INTERRUPT_CLASSIFIER.classify(
-                is_speaking=True,
-                text=actual_text,
-                wake_word=any(word in actual_text for word in wake_words),
-                is_final=True,
-            )
-            conn.logger.bind(tag=TAG).info(
-                f"播放中ASR分段打断判断: mode={barge_in_mode}, decision={interrupt.decision.value}, "
-                f"reason={interrupt.reason}, text={actual_text}"
-            )
-            if interrupt.decision == InterruptDecision.IGNORE:
-                return
-            if (
-                interrupt.decision == InterruptDecision.SOFT_INTERRUPT
-                and not interrupt_soft_as_hard
-            ):
-                return
-            await handleAbortMessage(
-                conn,
-                reason=f"{interrupt.decision.value}:{interrupt.reason}",
-            )
-        else:
-            await handleAbortMessage(conn)
+        wake_words = conn.config.get("wakeup_words", [])
+        interrupt = INTERRUPT_CLASSIFIER.classify(
+            is_speaking=True,
+            text=actual_text,
+            wake_word=any(word in actual_text for word in wake_words),
+            is_final=True,
+        )
+        conn.logger.bind(tag=TAG).info(
+            f"播放中ASR分段打断判断: mode={barge_in_mode}, decision={interrupt.decision.value}, "
+            f"reason={interrupt.reason}, text={actual_text}"
+        )
+        if interrupt.decision == InterruptDecision.IGNORE:
+            return
+        if (
+            interrupt.decision == InterruptDecision.SOFT_INTERRUPT
+            and not interrupt_soft_as_hard
+        ):
+            return
+        await handleAbortMessage(
+            conn,
+            reason=f"{interrupt.decision.value}:{interrupt.reason}",
+        )
     elif conn.client_is_speaking and conn.client_listen_mode != "manual":
         conn.logger.bind(tag=TAG).info("播放中收到新的ASR分段，继续送入LLM，不打断当前TTS")
 

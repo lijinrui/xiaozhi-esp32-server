@@ -27,7 +27,15 @@ class TurnManager:
             "query": query,
             "source": source,
             "started_at": now,
+            "llm_first_delta_at": None,
             "llm_first_token_at": None,
+            "tool_choice_at": None,
+            "tool_call_started_at": None,
+            "tool_result_at": None,
+            "tool_result_llm_started_at": None,
+            "tool_result_llm_first_delta_at": None,
+            "tool_result_llm_first_token_at": None,
+            "tool_names": [],
             "tts_first_audio_at": None,
             "abort_received_at": None,
             "tts_stop_sent_at": None,
@@ -104,6 +112,49 @@ class TurnManager:
         if metrics and metrics.get("llm_first_token_at") is None:
             metrics["llm_first_token_at"] = time.monotonic()
 
+    def mark_first_delta(self, turn_id):
+        metrics = self._get_metrics(turn_id)
+        if metrics and metrics.get("llm_first_delta_at") is None:
+            metrics["llm_first_delta_at"] = time.monotonic()
+
+    def mark_tool_choice(self, turn_id, tool_names=None):
+        metrics = self._get_metrics(turn_id)
+        if not metrics:
+            return
+        if metrics.get("tool_choice_at") is None:
+            metrics["tool_choice_at"] = time.monotonic()
+        if tool_names:
+            existing = list(metrics.get("tool_names") or [])
+            for tool_name in tool_names:
+                if tool_name and tool_name not in existing:
+                    existing.append(tool_name)
+            metrics["tool_names"] = existing
+
+    def mark_tool_call_started(self, turn_id):
+        metrics = self._get_metrics(turn_id)
+        if metrics and metrics.get("tool_call_started_at") is None:
+            metrics["tool_call_started_at"] = time.monotonic()
+
+    def mark_tool_result(self, turn_id):
+        metrics = self._get_metrics(turn_id)
+        if metrics:
+            metrics["tool_result_at"] = time.monotonic()
+
+    def mark_tool_result_llm_started(self, turn_id):
+        metrics = self._get_metrics(turn_id)
+        if metrics and metrics.get("tool_result_llm_started_at") is None:
+            metrics["tool_result_llm_started_at"] = time.monotonic()
+
+    def mark_tool_result_llm_first_delta(self, turn_id):
+        metrics = self._get_metrics(turn_id)
+        if metrics and metrics.get("tool_result_llm_first_delta_at") is None:
+            metrics["tool_result_llm_first_delta_at"] = time.monotonic()
+
+    def mark_tool_result_llm_first_token(self, turn_id):
+        metrics = self._get_metrics(turn_id)
+        if metrics and metrics.get("tool_result_llm_first_token_at") is None:
+            metrics["tool_result_llm_first_token_at"] = time.monotonic()
+
     def mark_first_audio(self, turn_id):
         metrics = self._get_metrics(turn_id)
         if metrics and metrics.get("tts_first_audio_at") is None:
@@ -167,4 +218,3 @@ def delta_ms(start, end):
     if start is None or end is None:
         return None
     return round((end - start) * 1000, 1)
-

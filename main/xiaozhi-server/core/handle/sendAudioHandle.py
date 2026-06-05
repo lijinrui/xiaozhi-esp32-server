@@ -313,6 +313,9 @@ async def send_tts_message(conn: "ConnectionHandler", state, text=None, turn_id=
     if text is not None:
         message["text"] = textUtils.check_emoji(text)
 
+    if state == "start":
+        conn.client_is_speaking = True
+
     # TTS播放结束
     if state == "stop":
         # 保存当前的 sentence_id，用于后续判断是否是当前轮次

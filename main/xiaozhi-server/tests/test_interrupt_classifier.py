@@ -8,7 +8,7 @@ class InterruptClassifierTest(unittest.TestCase):
         self.classifier = InterruptClassifier()
 
     def test_hard_interrupt_phrases(self):
-        for text in ("停一下", "等等", "不是", "不对", "我说的是另一个"):
+        for text in ("停一下", "停一", "等等", "不是", "不对", "我说的是另一个"):
             decision = self.classifier.classify(
                 playback_state="speaking",
                 asr_final=text,
@@ -44,4 +44,3 @@ class InterruptClassifierTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

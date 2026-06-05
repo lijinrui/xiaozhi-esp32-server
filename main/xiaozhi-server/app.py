@@ -43,6 +43,15 @@ async def monitor_stdin():
         await ainput()  # 异步等待输入，消费回车
 
 
+def log_task_exception(task_name, task):
+    """记录后台服务任务的异常，避免启动失败后主循环静默等待"""
+    if task.cancelled():
+        return
+    exception = task.exception()
+    if exception:
+        logger.bind(tag=TAG).error("{} 任务异常退出: {}", task_name, exception)
+
+
 async def main():
     check_ffmpeg_installed()
     config = load_config()
@@ -61,8 +70,10 @@ async def main():
     
     config["server"]["auth_key"] = auth_key
 
-    # 添加 stdin 监控任务
-    stdin_task = asyncio.create_task(monitor_stdin())
+    # 只在交互式终端下监控 stdin；后台启动时 stdin 可能不可读，不能因此影响服务生命周期
+    stdin_task = None
+    if sys.stdin.isatty():
+        stdin_task = asyncio.create_task(monitor_stdin())
 
     # 启动全局GC管理器（5分钟清理一次）
     gc_manager = get_gc_manager(interval_seconds=300)
@@ -71,9 +82,11 @@ async def main():
     # 启动 WebSocket 服务器
     ws_server = WebSocketServer(config)
     ws_task = asyncio.create_task(ws_server.start())
+    ws_task.add_done_callback(lambda task: log_task_exception("WebSocket", task))
     # 启动 Simple http 服务器
     ota_server = SimpleHttpServer(config)
     ota_task = asyncio.create_task(ota_server.start())
+    ota_task.add_done_callback(lambda task: log_task_exception("HTTP", task))
 
     read_config_from_api = config.get("read_config_from_api", False)
     port = int(config["server"].get("http_port", 8003))
@@ -131,14 +144,16 @@ async def main():
         await gc_manager.stop()
 
         # 取消所有任务（关键修复点）
-        stdin_task.cancel()
+        if stdin_task:
+            stdin_task.cancel()
         ws_task.cancel()
         if ota_task:
             ota_task.cancel()
 
         # 等待任务终止（必须加超时）
+        tasks = [task for task in [stdin_task, ws_task, ota_task] if task]
         await asyncio.wait(
-            [stdin_task, ws_task, ota_task] if ota_task else [stdin_task, ws_task],
+            tasks,
             timeout=3.0,
             return_when=asyncio.ALL_COMPLETED,
         )

@@ -427,11 +427,6 @@ ASR:
     #   normal    默认推荐，只在“停一下/等等/不是/明显新问题”等明确插话时打断
     #   sensitive 灵敏模式，“那个/我想...”这类可疑插话也会打断，更接近 Pipecat 体验
     barge_in_mode: normal
-    # 兼容旧配置：未配置 barge_in_mode 时才读取下面两个字段；新配置建议只改 barge_in_mode
-    # 播放TTS时收到新的ASR分段，是否打断当前TTS；false 表示识别/LLM继续走，播放不阻断后续输入
-    interrupt_tts_on_segment: false
-    # 播放中打断前是否启用轻量规则分类；false 时退回“收到ASR分段即打断”的旧行为
-    enable_interrupt_classifier: true
     # STT显示后先不发送tts start，等真正有TTS音频时再切播放态，避免过早停止上行音频
     defer_tts_start_until_audio: true
     # TTS起播时先发送多少帧Opus静音，给设备播放器预热，避免吞掉首字

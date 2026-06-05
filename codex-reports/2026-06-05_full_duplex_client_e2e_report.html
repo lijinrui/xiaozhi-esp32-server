@@ -1,0 +1,2394 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>全双工仿真客户端 E2E 报告</title>
+  <style>
+    :root { --bg:#f6f7f9; --panel:#fff; --ink:#1f2933; --muted:#667085; --line:#d9dee7; --green:#13795b; --green-bg:#e8f5ef; --red:#b42318; --red-bg:#fff0ee; --amber:#854a0e; --amber-bg:#fff7d6; --blue:#175cd3; --blue-bg:#edf4ff; --shadow:0 10px 30px rgba(31,41,51,.08); }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; line-height:1.55; }
+    main { max-width:1240px; margin:0 auto; padding:28px 22px 46px; }
+    header { display:grid; grid-template-columns:1fr auto; gap:18px; align-items:end; margin-bottom:18px; }
+    h1 { margin:0 0 8px; font-size:28px; letter-spacing:0; }
+    h2 { margin:0 0 14px; font-size:18px; letter-spacing:0; }
+    h3 { margin:0 0 8px; font-size:17px; letter-spacing:0; }
+    p { margin:0; }
+    .muted { color:var(--muted); }
+    .timestamp { padding:12px 14px; border:1px solid var(--line); border-radius:6px; background:var(--panel); color:var(--muted); font-size:13px; text-align:right; }
+    .grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin:18px 0; }
+    .card,.panel,.case-card { background:var(--panel); border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow); }
+    .card { min-height:106px; padding:16px; }
+    .label { color:var(--muted); font-size:13px; }
+    .value { margin-top:8px; font-size:30px; font-weight:760; line-height:1; }
+    .note { margin-top:8px; color:var(--muted); font-size:13px; }
+    .panel { padding:18px; margin-top:14px; }
+    .case-card { padding:18px; margin-top:14px; }
+    .case-head { display:grid; grid-template-columns:1fr auto; gap:14px; align-items:start; }
+    .case-metrics { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:10px; margin:14px 0; }
+    .case-metrics div { padding:10px 12px; border:1px solid var(--line); border-radius:6px; background:#f8fafc; }
+    .case-metrics span { display:block; color:var(--muted); font-size:12px; }
+    .case-metrics strong { display:block; margin-top:4px; font-size:16px; }
+    .timeline { position:relative; display:grid; gap:8px; margin:0; padding:0; list-style:none; }
+    .timeline li { display:grid; grid-template-columns:minmax(180px,1fr) 110px minmax(120px,.7fr); gap:10px; align-items:center; padding:9px 10px; border:1px solid var(--line); border-radius:6px; background:#fff; }
+    .timeline strong { font-size:13px; }
+    .timeline em { color:var(--blue); font-style:normal; font-weight:700; }
+    .timeline span { color:var(--muted); font-size:13px; }
+    table { width:100%; border-collapse:collapse; min-width:1480px; font-size:13px; }
+    th,td { padding:10px 12px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
+    th { background:#f2f4f7; color:#344054; font-size:12px; }
+    .table-wrap { overflow-x:auto; border:1px solid var(--line); border-radius:8px; }
+    .failed { background:#fff8f7; }
+    .ok { display:inline-block; padding:3px 8px; border-radius:999px; background:var(--green-bg); color:var(--green); font-weight:700; }
+    .fail { display:inline-block; padding:3px 8px; border-radius:999px; background:var(--red-bg); color:var(--red); font-weight:700; }
+    .invalid { display:inline-block; padding:3px 8px; border-radius:999px; background:var(--amber-bg); color:var(--amber); font-weight:700; }
+    code { padding:2px 5px; border:1px solid var(--line); border-radius:4px; background:#f8fafc; font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; font-size:.92em; }
+    pre { overflow:auto; padding:14px; border-radius:6px; background:#111827; color:#fff; font-size:13px; }
+    @media (max-width:900px) { header,.grid,.case-head,.case-metrics { grid-template-columns:1fr; } main { padding:20px 14px; } .timeline li { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>全双工仿真客户端 E2E 报告</h1>
+      <p class="muted">真实 websocket 客户端仿真：首轮用户输入和播放中插话都使用 wav 音频转 Opus 后按 60ms 一帧流式发送，触发真实 ASR / LLM / function_call / TTS。</p>
+    </div>
+    <div class="timestamp">生成时间<br>2026-06-05</div>
+  </header>
+  <section class="grid">
+    <div class="card"><div class="label">通过用例</div><div class="value">22/22</div><div class="note">第 1 轮为暖机轮，其余轮次要求 LLM 首 token &lt; 1s</div></div>
+    <div class="card"><div class="label">测试轮次</div><div class="value">2</div><div class="note">每轮新建 websocket，服务进程不重启</div></div>
+    <div class="card"><div class="label">平均首轮上传结束到首包</div><div class="value">2367.4ms</div><div class="note">ASR final + LLM/function_call + TTS 首包</div></div>
+    <div class="card"><div class="label">后续轮 LLM 首 delta</div><div class="value">553.8ms</div><div class="note">命中 &lt;1s：6/6</div></div>
+  </section>
+  <section class="panel">
+    <h2>测试口径</h2>
+    <p>仿真客户端先发送一段真实首轮用户语音，等客户端收到第一包 TTS 音频后再等待 700ms，然后发送真实插话语音。报告里的 T+ 时间都是从单个用例开始计时；“ASR final 到 LLM 首 delta”来自服务端 turn_metrics，用于判断 MLX prompt cache；“ASR final 到可播报文本”表示 function_call/direct_answer 中真正能送 TTS 的首段文本；“stop 后旧音频”只统计 stop 到下一次 TTS start 之前的音频，新 turn 回复会单独列为“stop 后新回复音频”。</p>
+  </section>
+  <section class="panel">
+    <h2>用例时间线</h2>
+    
+            <section class="case-card">
+              <div class="case-head">
+                <div>
+                  <h3>明确停止 <code>explicit_stop</code></h3>
+                  <p>第 1 轮：小智正在回答一段较长内容时，用户插话说“停一下”。</p>
+                  <p class="muted">预期：normal 模式应判定为明确打断，停止当前 TTS；如果随后有新回复，不能算作旧回复残留。</p>
+                </div>
+                <div><span class="ok">OK</span></div>
+              </div>
+              <div class="case-metrics">
+                <div><span>首轮输入音频</span><strong>8.17s</strong></div>
+                <div><span>插话音频</span><strong>0.57s</strong></div>
+                <div><span>ASR final 到 LLM 首 delta</span><strong>499.2ms</strong></div>
+                <div><span>ASR final 到可播报文本</span><strong>499.2ms</strong></div>
+                <div><span>首轮上传结束到首包</span><strong>2326.7ms</strong></div>
+                <div><span>打断到 stop</span><strong>815.0ms</strong></div>
+                <div><span>stop 后旧音频</span><strong>0 包</strong></div>
+                <div><span>stop 后新回复音频</span><strong>0 包</strong></div>
+              </div>
+              <ol class="timeline">
+                
+                <li>
+                  <strong>连接初始化完成</strong>
+                  <em>T+1541.8ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首次 ASR partial</strong>
+                  <em>T+2234.7ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首轮用户音频上传结束</strong>
+                  <em>T+10041.8ms</em>
+                  <span>阶段耗时 8167.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>首轮识别文本就绪</strong>
+                  <em>T+10395.9ms</em>
+                  <span>阶段耗时 354.1ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS start</strong>
+                  <em>T+12368.3ms</em>
+                  <span>阶段耗时 1972.4ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到首个 TTS 音频包</strong>
+                  <em>T+12368.5ms</em>
+                  <span>阶段耗时 0.2ms</span>
+                </li>
+                
+                <li>
+                  <strong>开始注入打断音频</strong>
+                  <em>T+13074.6ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>打断音频上传结束</strong>
+                  <em>T+13694.8ms</em>
+                  <span>阶段耗时 565.2ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS stop</strong>
+                  <em>T+13889.6ms</em>
+                  <span>阶段耗时 815.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到插话 ASR 文本</strong>
+                  <em>T+13889.9ms</em>
+                  
+                </li>
+                
+              </ol>
+            </section>
+            
+            <section class="case-card">
+              <div class="case-head">
+                <div>
+                  <h3>明确叫停 <code>explicit_wait</code></h3>
+                  <p>第 1 轮：小智正在回答一段较长内容时，用户插话说“等等我重新问”。</p>
+                  <p class="muted">预期：normal 模式应判定为明确打断，停止当前 TTS；如果随后有新回复，不能算作旧回复残留。</p>
+                </div>
+                <div><span class="ok">OK</span></div>
+              </div>
+              <div class="case-metrics">
+                <div><span>首轮输入音频</span><strong>8.17s</strong></div>
+                <div><span>插话音频</span><strong>1.47s</strong></div>
+                <div><span>ASR final 到 LLM 首 delta</span><strong>529.9ms</strong></div>
+                <div><span>ASR final 到可播报文本</span><strong>529.9ms</strong></div>
+                <div><span>首轮上传结束到首包</span><strong>2313.7ms</strong></div>
+                <div><span>打断到 stop</span><strong>1736.8ms</strong></div>
+                <div><span>stop 后旧音频</span><strong>0 包</strong></div>
+                <div><span>stop 后新回复音频</span><strong>0 包</strong></div>
+              </div>
+              <ol class="timeline">
+                
+                <li>
+                  <strong>连接初始化完成</strong>
+                  <em>T+1525.6ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首次 ASR partial</strong>
+                  <em>T+2228.2ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首轮用户音频上传结束</strong>
+                  <em>T+9998.2ms</em>
+                  <span>阶段耗时 8167.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>首轮识别文本就绪</strong>
+                  <em>T+10322.1ms</em>
+                  <span>阶段耗时 323.9ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS start</strong>
+                  <em>T+12311.9ms</em>
+                  <span>阶段耗时 1989.8ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到首个 TTS 音频包</strong>
+                  <em>T+12311.9ms</em>
+                  <span>阶段耗时 0.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>开始注入打断音频</strong>
+                  <em>T+13022.4ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>打断音频上传结束</strong>
+                  <em>T+14553.4ms</em>
+                  <span>阶段耗时 1469.8ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS stop</strong>
+                  <em>T+14759.2ms</em>
+                  <span>阶段耗时 1736.8ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到插话 ASR 文本</strong>
+                  <em>T+14760.5ms</em>
+                  
+                </li>
+                
+              </ol>
+            </section>
+            
+            <section class="case-card">
+              <div class="case-head">
+                <div>
+                  <h3>纠正目标 <code>correction_wrong_target</code></h3>
+                  <p>第 1 轮：小智正在回答时，用户插话说“不是这个，我问的是天气”。</p>
+                  <p class="muted">预期：normal 模式应判定为纠正类打断，停止当前 TTS，并进入新一轮处理。</p>
+                </div>
+                <div><span class="ok">OK</span></div>
+              </div>
+              <div class="case-metrics">
+                <div><span>首轮输入音频</span><strong>8.17s</strong></div>
+                <div><span>插话音频</span><strong>2.13s</strong></div>
+                <div><span>ASR final 到 LLM 首 delta</span><strong>529.9ms</strong></div>
+                <div><span>ASR final 到可播报文本</span><strong>529.9ms</strong></div>
+                <div><span>首轮上传结束到首包</span><strong>2370.3ms</strong></div>
+                <div><span>打断到 stop</span><strong>1395.0ms</strong></div>
+                <div><span>stop 后旧音频</span><strong>0 包</strong></div>
+                <div><span>stop 后新回复音频</span><strong>0 包</strong></div>
+              </div>
+              <ol class="timeline">
+                
+                <li>
+                  <strong>连接初始化完成</strong>
+                  <em>T+1525.7ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首次 ASR partial</strong>
+                  <em>T+2219.3ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首轮用户音频上传结束</strong>
+                  <em>T+10009.7ms</em>
+                  <span>阶段耗时 8167.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>首轮识别文本就绪</strong>
+                  <em>T+10380.7ms</em>
+                  <span>阶段耗时 370.9ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS start</strong>
+                  <em>T+12380.0ms</em>
+                  <span>阶段耗时 1999.3ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到首个 TTS 音频包</strong>
+                  <em>T+12380.0ms</em>
+                  <span>阶段耗时 0.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>开始注入打断音频</strong>
+                  <em>T+13098.8ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>收到 TTS stop</strong>
+                  <em>T+14493.9ms</em>
+                  <span>阶段耗时 1395.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>打断音频上传结束</strong>
+                  <em>T+15311.1ms</em>
+                  <span>阶段耗时 2125.9ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到插话 ASR 文本</strong>
+                  <em>T+15515.3ms</em>
+                  
+                </li>
+                
+              </ol>
+            </section>
+            
+            <section class="case-card">
+              <div class="case-head">
+                <div>
+                  <h3>新问题 <code>question_weather</code></h3>
+                  <p>第 1 轮：小智正在回答时，用户直接插入新的问题“那明天天气怎么样”。</p>
+                  <p class="muted">预期：normal 模式应判定为新问题打断，停止当前 TTS，并进入新一轮处理。</p>
+                </div>
+                <div><span class="ok">OK</span></div>
+              </div>
+              <div class="case-metrics">
+                <div><span>首轮输入音频</span><strong>8.17s</strong></div>
+                <div><span>插话音频</span><strong>1.32s</strong></div>
+                <div><span>ASR final 到 LLM 首 delta</span><strong>542.4ms</strong></div>
+                <div><span>ASR final 到可播报文本</span><strong>542.4ms</strong></div>
+                <div><span>首轮上传结束到首包</span><strong>2369.1ms</strong></div>
+                <div><span>打断到 stop</span><strong>1563.6ms</strong></div>
+                <div><span>stop 后旧音频</span><strong>0 包</strong></div>
+                <div><span>stop 后新回复音频</span><strong>0 包</strong></div>
+              </div>
+              <ol class="timeline">
+                
+                <li>
+                  <strong>连接初始化完成</strong>
+                  <em>T+1525.6ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首次 ASR partial</strong>
+                  <em>T+2220.3ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首轮用户音频上传结束</strong>
+                  <em>T+10029.3ms</em>
+                  <span>阶段耗时 8167.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>首轮识别文本就绪</strong>
+                  <em>T+10381.0ms</em>
+                  <span>阶段耗时 351.7ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS start</strong>
+                  <em>T+12398.2ms</em>
+                  <span>阶段耗时 2017.2ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到首个 TTS 音频包</strong>
+                  <em>T+12398.4ms</em>
+                  <span>阶段耗时 0.2ms</span>
+                </li>
+                
+                <li>
+                  <strong>开始注入打断音频</strong>
+                  <em>T+13109.7ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>打断音频上传结束</strong>
+                  <em>T+14454.7ms</em>
+                  <span>阶段耗时 1318.9ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS stop</strong>
+                  <em>T+14673.3ms</em>
+                  <span>阶段耗时 1563.6ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到插话 ASR 文本</strong>
+                  <em>T+14674.2ms</em>
+                  
+                </li>
+                
+              </ol>
+            </section>
+            
+            <section class="case-card">
+              <div class="case-head">
+                <div>
+                  <h3>要求换说法 <code>question_rephrase</code></h3>
+                  <p>第 1 轮：小智正在回答时，用户插话说“能不能换一种说法”。</p>
+                  <p class="muted">预期：normal 模式应判定为新指令打断，停止当前 TTS，并进入新一轮处理。</p>
+                </div>
+                <div><span class="ok">OK</span></div>
+              </div>
+              <div class="case-metrics">
+                <div><span>首轮输入音频</span><strong>8.17s</strong></div>
+                <div><span>插话音频</span><strong>1.32s</strong></div>
+                <div><span>ASR final 到 LLM 首 delta</span><strong>550.4ms</strong></div>
+                <div><span>ASR final 到可播报文本</span><strong>550.4ms</strong></div>
+                <div><span>首轮上传结束到首包</span><strong>2368.9ms</strong></div>
+                <div><span>打断到 stop</span><strong>1637.1ms</strong></div>
+                <div><span>stop 后旧音频</span><strong>0 包</strong></div>
+                <div><span>stop 后新回复音频</span><strong>0 包</strong></div>
+              </div>
+              <ol class="timeline">
+                
+                <li>
+                  <strong>连接初始化完成</strong>
+                  <em>T+1525.4ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首次 ASR partial</strong>
+                  <em>T+2224.6ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首轮用户音频上传结束</strong>
+                  <em>T+10009.0ms</em>
+                  <span>阶段耗时 8167.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>首轮识别文本就绪</strong>
+                  <em>T+10360.2ms</em>
+                  <span>阶段耗时 351.1ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS start</strong>
+                  <em>T+12377.9ms</em>
+                  <span>阶段耗时 2017.7ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到首个 TTS 音频包</strong>
+                  <em>T+12377.9ms</em>
+                  <span>阶段耗时 0.1ms</span>
+                </li>
+                
+                <li>
+                  <strong>开始注入打断音频</strong>
+                  <em>T+13083.5ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>打断音频上传结束</strong>
+                  <em>T+14500.3ms</em>
+                  <span>阶段耗时 1322.6ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS stop</strong>
+                  <em>T+14720.6ms</em>
+                  <span>阶段耗时 1637.1ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到插话 ASR 文本</strong>
+                  <em>T+14721.5ms</em>
+                  
+                </li>
+                
+              </ol>
+            </section>
+            
+            <section class="case-card">
+              <div class="case-head">
+                <div>
+                  <h3>工具查询 <code>lunar_tool_query</code></h3>
+                  <p>第 1 轮：小智正在回答时，用户插话问“明天的黄历宜忌是什么”。</p>
+                  <p class="muted">预期：normal 模式应判定为新问题打断，停止当前 TTS；新 turn 应进入真实 function_call 工具链查询黄历。</p>
+                </div>
+                <div><span class="ok">OK</span></div>
+              </div>
+              <div class="case-metrics">
+                <div><span>首轮输入音频</span><strong>8.17s</strong></div>
+                <div><span>插话音频</span><strong>1.94s</strong></div>
+                <div><span>ASR final 到 LLM 首 delta</span><strong>549.0ms</strong></div>
+                <div><span>ASR final 到可播报文本</span><strong>549.1ms</strong></div>
+                <div><span>首轮上传结束到首包</span><strong>2370.1ms</strong></div>
+                <div><span>打断到 stop</span><strong>2260.6ms</strong></div>
+                <div><span>stop 后旧音频</span><strong>0 包</strong></div>
+                <div><span>stop 后新回复音频</span><strong>0 包</strong></div>
+              </div>
+              <ol class="timeline">
+                
+                <li>
+                  <strong>连接初始化完成</strong>
+                  <em>T+1525.8ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首次 ASR partial</strong>
+                  <em>T+2231.2ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首轮用户音频上传结束</strong>
+                  <em>T+9993.0ms</em>
+                  <span>阶段耗时 8167.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>首轮识别文本就绪</strong>
+                  <em>T+10336.3ms</em>
+                  <span>阶段耗时 343.3ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS start</strong>
+                  <em>T+12363.1ms</em>
+                  <span>阶段耗时 2026.8ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到首个 TTS 音频包</strong>
+                  <em>T+12363.1ms</em>
+                  <span>阶段耗时 0.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>开始注入打断音频</strong>
+                  <em>T+13085.5ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>打断音频上传结束</strong>
+                  <em>T+15111.6ms</em>
+                  <span>阶段耗时 1942.9ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS stop</strong>
+                  <em>T+15346.1ms</em>
+                  <span>阶段耗时 2260.6ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到插话 ASR 文本</strong>
+                  <em>T+16295.6ms</em>
+                  
+                </li>
+                
+              </ol>
+            </section>
+            
+            <section class="case-card">
+              <div class="case-head">
+                <div>
+                  <h3>短附和 <code>backchannel_um</code></h3>
+                  <p>第 1 轮：小智正在回答时，用户只说“嗯”。</p>
+                  <p class="muted">预期：normal 模式不应把短附和当成硬打断。</p>
+                </div>
+                <div><span class="ok">OK</span></div>
+              </div>
+              <div class="case-metrics">
+                <div><span>首轮输入音频</span><strong>8.17s</strong></div>
+                <div><span>插话音频</span><strong>0.34s</strong></div>
+                <div><span>ASR final 到 LLM 首 delta</span><strong>-</strong></div>
+                <div><span>ASR final 到可播报文本</span><strong>-</strong></div>
+                <div><span>首轮上传结束到首包</span><strong>2352.1ms</strong></div>
+                <div><span>打断到 stop</span><strong>-</strong></div>
+                <div><span>stop 后旧音频</span><strong>0 包</strong></div>
+                <div><span>stop 后新回复音频</span><strong>0 包</strong></div>
+              </div>
+              <ol class="timeline">
+                
+                <li>
+                  <strong>连接初始化完成</strong>
+                  <em>T+1525.4ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首次 ASR partial</strong>
+                  <em>T+2218.4ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首轮用户音频上传结束</strong>
+                  <em>T+10001.6ms</em>
+                  <span>阶段耗时 8167.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>首轮识别文本就绪</strong>
+                  <em>T+10341.8ms</em>
+                  <span>阶段耗时 340.2ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS start</strong>
+                  <em>T+12353.5ms</em>
+                  <span>阶段耗时 2011.7ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到首个 TTS 音频包</strong>
+                  <em>T+12353.6ms</em>
+                  <span>阶段耗时 0.1ms</span>
+                </li>
+                
+                <li>
+                  <strong>开始注入打断音频</strong>
+                  <em>T+13058.2ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>打断音频上传结束</strong>
+                  <em>T+13429.8ms</em>
+                  <span>阶段耗时 336.1ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到插话 ASR 文本</strong>
+                  <em>T+13468.3ms</em>
+                  
+                </li>
+                
+              </ol>
+            </section>
+            
+            <section class="case-card">
+              <div class="case-head">
+                <div>
+                  <h3>确认附和 <code>backchannel_ok</code></h3>
+                  <p>第 1 轮：小智正在回答时，用户只说“好的”。</p>
+                  <p class="muted">预期：normal 模式不应把确认附和当成硬打断。</p>
+                </div>
+                <div><span class="ok">OK</span></div>
+              </div>
+              <div class="case-metrics">
+                <div><span>首轮输入音频</span><strong>8.17s</strong></div>
+                <div><span>插话音频</span><strong>0.39s</strong></div>
+                <div><span>ASR final 到 LLM 首 delta</span><strong>-</strong></div>
+                <div><span>ASR final 到可播报文本</span><strong>-</strong></div>
+                <div><span>首轮上传结束到首包</span><strong>2362.6ms</strong></div>
+                <div><span>打断到 stop</span><strong>-</strong></div>
+                <div><span>stop 后旧音频</span><strong>0 包</strong></div>
+                <div><span>stop 后新回复音频</span><strong>0 包</strong></div>
+              </div>
+              <ol class="timeline">
+                
+                <li>
+                  <strong>连接初始化完成</strong>
+                  <em>T+1524.1ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首次 ASR partial</strong>
+                  <em>T+2212.3ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首轮用户音频上传结束</strong>
+                  <em>T+9998.8ms</em>
+                  <span>阶段耗时 8167.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>首轮识别文本就绪</strong>
+                  <em>T+10319.8ms</em>
+                  <span>阶段耗时 321.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS start</strong>
+                  <em>T+12361.4ms</em>
+                  <span>阶段耗时 2041.6ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到首个 TTS 音频包</strong>
+                  <em>T+12361.4ms</em>
+                  <span>阶段耗时 0.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>开始注入打断音频</strong>
+                  <em>T+13083.9ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>打断音频上传结束</strong>
+                  <em>T+13510.4ms</em>
+                  <span>阶段耗时 385.9ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到插话 ASR 文本</strong>
+                  <em>T+13563.3ms</em>
+                  
+                </li>
+                
+              </ol>
+            </section>
+            
+            <section class="case-card">
+              <div class="case-head">
+                <div>
+                  <h3>短犹豫 <code>hesitation_short_partial</code></h3>
+                  <p>第 1 轮：小智正在回答时，用户只说“那个”。</p>
+                  <p class="muted">预期：normal 模式不应把短犹豫当成硬打断。</p>
+                </div>
+                <div><span class="ok">OK</span></div>
+              </div>
+              <div class="case-metrics">
+                <div><span>首轮输入音频</span><strong>8.17s</strong></div>
+                <div><span>插话音频</span><strong>0.42s</strong></div>
+                <div><span>ASR final 到 LLM 首 delta</span><strong>-</strong></div>
+                <div><span>ASR final 到可播报文本</span><strong>-</strong></div>
+                <div><span>首轮上传结束到首包</span><strong>2345.7ms</strong></div>
+                <div><span>打断到 stop</span><strong>-</strong></div>
+                <div><span>stop 后旧音频</span><strong>0 包</strong></div>
+                <div><span>stop 后新回复音频</span><strong>0 包</strong></div>
+              </div>
+              <ol class="timeline">
+                
+                <li>
+                  <strong>连接初始化完成</strong>
+                  <em>T+1525.6ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首次 ASR partial</strong>
+                  <em>T+2207.2ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首轮用户音频上传结束</strong>
+                  <em>T+10002.3ms</em>
+                  <span>阶段耗时 8167.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>首轮识别文本就绪</strong>
+                  <em>T+10341.8ms</em>
+                  <span>阶段耗时 339.5ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS start</strong>
+                  <em>T+12347.9ms</em>
+                  <span>阶段耗时 2006.1ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到首个 TTS 音频包</strong>
+                  <em>T+12348.0ms</em>
+                  <span>阶段耗时 0.1ms</span>
+                </li>
+                
+                <li>
+                  <strong>开始注入打断音频</strong>
+                  <em>T+13068.5ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>打断音频上传结束</strong>
+                  <em>T+13496.2ms</em>
+                  <span>阶段耗时 418.6ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到插话 ASR 文本</strong>
+                  <em>T+13587.3ms</em>
+                  
+                </li>
+                
+              </ol>
+            </section>
+            
+            <section class="case-card">
+              <div class="case-head">
+                <div>
+                  <h3>普通插话 <code>ordinary_final_pause</code></h3>
+                  <p>第 1 轮：小智正在回答时，用户说“我觉得这个回答还可以”这类普通完整短句。</p>
+                  <p class="muted">预期：normal 模式不应把普通插话当成硬打断，因此不要求服务端发送 tts stop。</p>
+                </div>
+                <div><span class="ok">OK</span></div>
+              </div>
+              <div class="case-metrics">
+                <div><span>首轮输入音频</span><strong>8.17s</strong></div>
+                <div><span>插话音频</span><strong>1.83s</strong></div>
+                <div><span>ASR final 到 LLM 首 delta</span><strong>-</strong></div>
+                <div><span>ASR final 到可播报文本</span><strong>-</strong></div>
+                <div><span>首轮上传结束到首包</span><strong>2387.7ms</strong></div>
+                <div><span>打断到 stop</span><strong>-</strong></div>
+                <div><span>stop 后旧音频</span><strong>0 包</strong></div>
+                <div><span>stop 后新回复音频</span><strong>0 包</strong></div>
+              </div>
+              <ol class="timeline">
+                
+                <li>
+                  <strong>连接初始化完成</strong>
+                  <em>T+1525.6ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首次 ASR partial</strong>
+                  <em>T+2209.2ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首轮用户音频上传结束</strong>
+                  <em>T+9990.9ms</em>
+                  <span>阶段耗时 8167.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>首轮识别文本就绪</strong>
+                  <em>T+10343.0ms</em>
+                  <span>阶段耗时 352.1ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS start</strong>
+                  <em>T+12378.5ms</em>
+                  <span>阶段耗时 2035.5ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到首个 TTS 音频包</strong>
+                  <em>T+12378.6ms</em>
+                  <span>阶段耗时 0.1ms</span>
+                </li>
+                
+                <li>
+                  <strong>开始注入打断音频</strong>
+                  <em>T+13083.3ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>打断音频上传结束</strong>
+                  <em>T+14989.6ms</em>
+                  <span>阶段耗时 1828.4ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到插话 ASR 文本</strong>
+                  <em>T+15025.8ms</em>
+                  
+                </li>
+                
+              </ol>
+            </section>
+            
+            <section class="case-card">
+              <div class="case-head">
+                <div>
+                  <h3>普通陈述 <code>ordinary_final_environment</code></h3>
+                  <p>第 1 轮：小智正在回答时，用户说“今天外面声音有点大”。</p>
+                  <p class="muted">预期：normal 模式不应把普通环境陈述当成硬打断。</p>
+                </div>
+                <div><span class="ok">OK</span></div>
+              </div>
+              <div class="case-metrics">
+                <div><span>首轮输入音频</span><strong>8.17s</strong></div>
+                <div><span>插话音频</span><strong>1.59s</strong></div>
+                <div><span>ASR final 到 LLM 首 delta</span><strong>-</strong></div>
+                <div><span>ASR final 到可播报文本</span><strong>-</strong></div>
+                <div><span>首轮上传结束到首包</span><strong>2387.9ms</strong></div>
+                <div><span>打断到 stop</span><strong>-</strong></div>
+                <div><span>stop 后旧音频</span><strong>0 包</strong></div>
+                <div><span>stop 后新回复音频</span><strong>0 包</strong></div>
+              </div>
+              <ol class="timeline">
+                
+                <li>
+                  <strong>连接初始化完成</strong>
+                  <em>T+1524.7ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首次 ASR partial</strong>
+                  <em>T+2207.6ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首轮用户音频上传结束</strong>
+                  <em>T+9990.3ms</em>
+                  <span>阶段耗时 8167.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>首轮识别文本就绪</strong>
+                  <em>T+10334.7ms</em>
+                  <span>阶段耗时 344.4ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS start</strong>
+                  <em>T+12378.1ms</em>
+                  <span>阶段耗时 2043.4ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到首个 TTS 音频包</strong>
+                  <em>T+12378.3ms</em>
+                  <span>阶段耗时 0.1ms</span>
+                </li>
+                
+                <li>
+                  <strong>开始注入打断音频</strong>
+                  <em>T+13088.8ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>打断音频上传结束</strong>
+                  <em>T+14743.1ms</em>
+                  <span>阶段耗时 1586.1ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到插话 ASR 文本</strong>
+                  <em>T+14825.9ms</em>
+                  
+                </li>
+                
+              </ol>
+            </section>
+            
+            <section class="case-card">
+              <div class="case-head">
+                <div>
+                  <h3>明确停止 <code>explicit_stop</code></h3>
+                  <p>第 2 轮：小智正在回答一段较长内容时，用户插话说“停一下”。</p>
+                  <p class="muted">预期：normal 模式应判定为明确打断，停止当前 TTS；如果随后有新回复，不能算作旧回复残留。</p>
+                </div>
+                <div><span class="ok">OK</span></div>
+              </div>
+              <div class="case-metrics">
+                <div><span>首轮输入音频</span><strong>8.17s</strong></div>
+                <div><span>插话音频</span><strong>0.57s</strong></div>
+                <div><span>ASR final 到 LLM 首 delta</span><strong>534.9ms</strong></div>
+                <div><span>ASR final 到可播报文本</span><strong>534.9ms</strong></div>
+                <div><span>首轮上传结束到首包</span><strong>2357.3ms</strong></div>
+                <div><span>打断到 stop</span><strong>804.5ms</strong></div>
+                <div><span>stop 后旧音频</span><strong>0 包</strong></div>
+                <div><span>stop 后新回复音频</span><strong>0 包</strong></div>
+              </div>
+              <ol class="timeline">
+                
+                <li>
+                  <strong>连接初始化完成</strong>
+                  <em>T+1525.3ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首次 ASR partial</strong>
+                  <em>T+2206.4ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首轮用户音频上传结束</strong>
+                  <em>T+10006.5ms</em>
+                  <span>阶段耗时 8167.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>首轮识别文本就绪</strong>
+                  <em>T+10350.7ms</em>
+                  <span>阶段耗时 344.3ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS start</strong>
+                  <em>T+12363.8ms</em>
+                  <span>阶段耗时 2013.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到首个 TTS 音频包</strong>
+                  <em>T+12363.8ms</em>
+                  <span>阶段耗时 0.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>开始注入打断音频</strong>
+                  <em>T+13078.8ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>打断音频上传结束</strong>
+                  <em>T+13689.6ms</em>
+                  <span>阶段耗时 565.2ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS stop</strong>
+                  <em>T+13883.3ms</em>
+                  <span>阶段耗时 804.5ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到插话 ASR 文本</strong>
+                  <em>T+13884.3ms</em>
+                  
+                </li>
+                
+              </ol>
+            </section>
+            
+            <section class="case-card">
+              <div class="case-head">
+                <div>
+                  <h3>明确叫停 <code>explicit_wait</code></h3>
+                  <p>第 2 轮：小智正在回答一段较长内容时，用户插话说“等等我重新问”。</p>
+                  <p class="muted">预期：normal 模式应判定为明确打断，停止当前 TTS；如果随后有新回复，不能算作旧回复残留。</p>
+                </div>
+                <div><span class="ok">OK</span></div>
+              </div>
+              <div class="case-metrics">
+                <div><span>首轮输入音频</span><strong>8.17s</strong></div>
+                <div><span>插话音频</span><strong>1.47s</strong></div>
+                <div><span>ASR final 到 LLM 首 delta</span><strong>557.5ms</strong></div>
+                <div><span>ASR final 到可播报文本</span><strong>557.5ms</strong></div>
+                <div><span>首轮上传结束到首包</span><strong>2373.2ms</strong></div>
+                <div><span>打断到 stop</span><strong>1751.8ms</strong></div>
+                <div><span>stop 后旧音频</span><strong>0 包</strong></div>
+                <div><span>stop 后新回复音频</span><strong>0 包</strong></div>
+              </div>
+              <ol class="timeline">
+                
+                <li>
+                  <strong>连接初始化完成</strong>
+                  <em>T+1524.0ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首次 ASR partial</strong>
+                  <em>T+2212.0ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首轮用户音频上传结束</strong>
+                  <em>T+9990.2ms</em>
+                  <span>阶段耗时 8167.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>首轮识别文本就绪</strong>
+                  <em>T+10340.6ms</em>
+                  <span>阶段耗时 350.4ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS start</strong>
+                  <em>T+12363.3ms</em>
+                  <span>阶段耗时 2022.7ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到首个 TTS 音频包</strong>
+                  <em>T+12363.4ms</em>
+                  <span>阶段耗时 0.1ms</span>
+                </li>
+                
+                <li>
+                  <strong>开始注入打断音频</strong>
+                  <em>T+13073.1ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>打断音频上传结束</strong>
+                  <em>T+14608.5ms</em>
+                  <span>阶段耗时 1469.8ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS stop</strong>
+                  <em>T+14824.9ms</em>
+                  <span>阶段耗时 1751.8ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到插话 ASR 文本</strong>
+                  <em>T+14825.8ms</em>
+                  
+                </li>
+                
+              </ol>
+            </section>
+            
+            <section class="case-card">
+              <div class="case-head">
+                <div>
+                  <h3>纠正目标 <code>correction_wrong_target</code></h3>
+                  <p>第 2 轮：小智正在回答时，用户插话说“不是这个，我问的是天气”。</p>
+                  <p class="muted">预期：normal 模式应判定为纠正类打断，停止当前 TTS，并进入新一轮处理。</p>
+                </div>
+                <div><span class="ok">OK</span></div>
+              </div>
+              <div class="case-metrics">
+                <div><span>首轮输入音频</span><strong>8.17s</strong></div>
+                <div><span>插话音频</span><strong>2.13s</strong></div>
+                <div><span>ASR final 到 LLM 首 delta</span><strong>532.2ms</strong></div>
+                <div><span>ASR final 到可播报文本</span><strong>532.3ms</strong></div>
+                <div><span>首轮上传结束到首包</span><strong>2327.6ms</strong></div>
+                <div><span>打断到 stop</span><strong>1404.8ms</strong></div>
+                <div><span>stop 后旧音频</span><strong>0 包</strong></div>
+                <div><span>stop 后新回复音频</span><strong>0 包</strong></div>
+              </div>
+              <ol class="timeline">
+                
+                <li>
+                  <strong>连接初始化完成</strong>
+                  <em>T+1526.1ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首次 ASR partial</strong>
+                  <em>T+2212.5ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首轮用户音频上传结束</strong>
+                  <em>T+10005.7ms</em>
+                  <span>阶段耗时 8167.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>首轮识别文本就绪</strong>
+                  <em>T+10309.6ms</em>
+                  <span>阶段耗时 303.9ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS start</strong>
+                  <em>T+12333.3ms</em>
+                  <span>阶段耗时 2023.7ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到首个 TTS 音频包</strong>
+                  <em>T+12333.3ms</em>
+                  <span>阶段耗时 0.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>开始注入打断音频</strong>
+                  <em>T+13039.8ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>收到 TTS stop</strong>
+                  <em>T+14444.5ms</em>
+                  <span>阶段耗时 1404.8ms</span>
+                </li>
+                
+                <li>
+                  <strong>打断音频上传结束</strong>
+                  <em>T+15253.9ms</em>
+                  <span>阶段耗时 2125.9ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到插话 ASR 文本</strong>
+                  <em>T+15449.7ms</em>
+                  
+                </li>
+                
+              </ol>
+            </section>
+            
+            <section class="case-card">
+              <div class="case-head">
+                <div>
+                  <h3>新问题 <code>question_weather</code></h3>
+                  <p>第 2 轮：小智正在回答时，用户直接插入新的问题“那明天天气怎么样”。</p>
+                  <p class="muted">预期：normal 模式应判定为新问题打断，停止当前 TTS，并进入新一轮处理。</p>
+                </div>
+                <div><span class="ok">OK</span></div>
+              </div>
+              <div class="case-metrics">
+                <div><span>首轮输入音频</span><strong>8.17s</strong></div>
+                <div><span>插话音频</span><strong>1.32s</strong></div>
+                <div><span>ASR final 到 LLM 首 delta</span><strong>560.3ms</strong></div>
+                <div><span>ASR final 到可播报文本</span><strong>560.3ms</strong></div>
+                <div><span>首轮上传结束到首包</span><strong>2380.4ms</strong></div>
+                <div><span>打断到 stop</span><strong>1576.3ms</strong></div>
+                <div><span>stop 后旧音频</span><strong>0 包</strong></div>
+                <div><span>stop 后新回复音频</span><strong>0 包</strong></div>
+              </div>
+              <ol class="timeline">
+                
+                <li>
+                  <strong>连接初始化完成</strong>
+                  <em>T+1524.2ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首次 ASR partial</strong>
+                  <em>T+2219.9ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首轮用户音频上传结束</strong>
+                  <em>T+10005.5ms</em>
+                  <span>阶段耗时 8167.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>首轮识别文本就绪</strong>
+                  <em>T+10358.2ms</em>
+                  <span>阶段耗时 352.7ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS start</strong>
+                  <em>T+12385.8ms</em>
+                  <span>阶段耗时 2027.7ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到首个 TTS 音频包</strong>
+                  <em>T+12385.9ms</em>
+                  <span>阶段耗时 0.1ms</span>
+                </li>
+                
+                <li>
+                  <strong>开始注入打断音频</strong>
+                  <em>T+13099.1ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>打断音频上传结束</strong>
+                  <em>T+14450.3ms</em>
+                  <span>阶段耗时 1318.9ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS stop</strong>
+                  <em>T+14675.5ms</em>
+                  <span>阶段耗时 1576.3ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到插话 ASR 文本</strong>
+                  <em>T+14676.7ms</em>
+                  
+                </li>
+                
+              </ol>
+            </section>
+            
+            <section class="case-card">
+              <div class="case-head">
+                <div>
+                  <h3>要求换说法 <code>question_rephrase</code></h3>
+                  <p>第 2 轮：小智正在回答时，用户插话说“能不能换一种说法”。</p>
+                  <p class="muted">预期：normal 模式应判定为新指令打断，停止当前 TTS，并进入新一轮处理。</p>
+                </div>
+                <div><span class="ok">OK</span></div>
+              </div>
+              <div class="case-metrics">
+                <div><span>首轮输入音频</span><strong>8.17s</strong></div>
+                <div><span>插话音频</span><strong>1.32s</strong></div>
+                <div><span>ASR final 到 LLM 首 delta</span><strong>587.9ms</strong></div>
+                <div><span>ASR final 到可播报文本</span><strong>587.9ms</strong></div>
+                <div><span>首轮上传结束到首包</span><strong>2392.6ms</strong></div>
+                <div><span>打断到 stop</span><strong>1628.2ms</strong></div>
+                <div><span>stop 后旧音频</span><strong>0 包</strong></div>
+                <div><span>stop 后新回复音频</span><strong>0 包</strong></div>
+              </div>
+              <ol class="timeline">
+                
+                <li>
+                  <strong>连接初始化完成</strong>
+                  <em>T+1525.8ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首次 ASR partial</strong>
+                  <em>T+2221.5ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首轮用户音频上传结束</strong>
+                  <em>T+9995.8ms</em>
+                  <span>阶段耗时 8167.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>首轮识别文本就绪</strong>
+                  <em>T+10330.8ms</em>
+                  <span>阶段耗时 335.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS start</strong>
+                  <em>T+12388.4ms</em>
+                  <span>阶段耗时 2057.6ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到首个 TTS 音频包</strong>
+                  <em>T+12388.4ms</em>
+                  <span>阶段耗时 0.1ms</span>
+                </li>
+                
+                <li>
+                  <strong>开始注入打断音频</strong>
+                  <em>T+13095.8ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>打断音频上传结束</strong>
+                  <em>T+14505.5ms</em>
+                  <span>阶段耗时 1322.6ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS stop</strong>
+                  <em>T+14724.0ms</em>
+                  <span>阶段耗时 1628.2ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到插话 ASR 文本</strong>
+                  <em>T+14725.1ms</em>
+                  
+                </li>
+                
+              </ol>
+            </section>
+            
+            <section class="case-card">
+              <div class="case-head">
+                <div>
+                  <h3>工具查询 <code>lunar_tool_query</code></h3>
+                  <p>第 2 轮：小智正在回答时，用户插话问“明天的黄历宜忌是什么”。</p>
+                  <p class="muted">预期：normal 模式应判定为新问题打断，停止当前 TTS；新 turn 应进入真实 function_call 工具链查询黄历。</p>
+                </div>
+                <div><span class="ok">OK</span></div>
+              </div>
+              <div class="case-metrics">
+                <div><span>首轮输入音频</span><strong>8.17s</strong></div>
+                <div><span>插话音频</span><strong>1.94s</strong></div>
+                <div><span>ASR final 到 LLM 首 delta</span><strong>550.2ms</strong></div>
+                <div><span>ASR final 到可播报文本</span><strong>550.2ms</strong></div>
+                <div><span>首轮上传结束到首包</span><strong>2348.0ms</strong></div>
+                <div><span>打断到 stop</span><strong>2249.9ms</strong></div>
+                <div><span>stop 后旧音频</span><strong>0 包</strong></div>
+                <div><span>stop 后新回复音频</span><strong>0 包</strong></div>
+              </div>
+              <ol class="timeline">
+                
+                <li>
+                  <strong>连接初始化完成</strong>
+                  <em>T+1525.7ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首次 ASR partial</strong>
+                  <em>T+2212.4ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首轮用户音频上传结束</strong>
+                  <em>T+10005.8ms</em>
+                  <span>阶段耗时 8167.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>首轮识别文本就绪</strong>
+                  <em>T+10335.6ms</em>
+                  <span>阶段耗时 329.8ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS start</strong>
+                  <em>T+12353.7ms</em>
+                  <span>阶段耗时 2018.1ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到首个 TTS 音频包</strong>
+                  <em>T+12353.8ms</em>
+                  <span>阶段耗时 0.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>开始注入打断音频</strong>
+                  <em>T+13057.3ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>打断音频上传结束</strong>
+                  <em>T+15091.1ms</em>
+                  <span>阶段耗时 1942.9ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS stop</strong>
+                  <em>T+15307.2ms</em>
+                  <span>阶段耗时 2249.9ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到插话 ASR 文本</strong>
+                  <em>T+16263.6ms</em>
+                  
+                </li>
+                
+              </ol>
+            </section>
+            
+            <section class="case-card">
+              <div class="case-head">
+                <div>
+                  <h3>短附和 <code>backchannel_um</code></h3>
+                  <p>第 2 轮：小智正在回答时，用户只说“嗯”。</p>
+                  <p class="muted">预期：normal 模式不应把短附和当成硬打断。</p>
+                </div>
+                <div><span class="ok">OK</span></div>
+              </div>
+              <div class="case-metrics">
+                <div><span>首轮输入音频</span><strong>8.17s</strong></div>
+                <div><span>插话音频</span><strong>0.34s</strong></div>
+                <div><span>ASR final 到 LLM 首 delta</span><strong>-</strong></div>
+                <div><span>ASR final 到可播报文本</span><strong>-</strong></div>
+                <div><span>首轮上传结束到首包</span><strong>2422.0ms</strong></div>
+                <div><span>打断到 stop</span><strong>-</strong></div>
+                <div><span>stop 后旧音频</span><strong>0 包</strong></div>
+                <div><span>stop 后新回复音频</span><strong>0 包</strong></div>
+              </div>
+              <ol class="timeline">
+                
+                <li>
+                  <strong>连接初始化完成</strong>
+                  <em>T+1523.6ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首次 ASR partial</strong>
+                  <em>T+2208.2ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首轮用户音频上传结束</strong>
+                  <em>T+9904.3ms</em>
+                  <span>阶段耗时 8167.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>首轮识别文本就绪</strong>
+                  <em>T+10269.8ms</em>
+                  <span>阶段耗时 365.4ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS start</strong>
+                  <em>T+12326.3ms</em>
+                  <span>阶段耗时 2056.5ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到首个 TTS 音频包</strong>
+                  <em>T+12326.3ms</em>
+                  <span>阶段耗时 0.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>开始注入打断音频</strong>
+                  <em>T+13032.4ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>打断音频上传结束</strong>
+                  <em>T+13399.7ms</em>
+                  <span>阶段耗时 336.1ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到插话 ASR 文本</strong>
+                  <em>T+13441.1ms</em>
+                  
+                </li>
+                
+              </ol>
+            </section>
+            
+            <section class="case-card">
+              <div class="case-head">
+                <div>
+                  <h3>确认附和 <code>backchannel_ok</code></h3>
+                  <p>第 2 轮：小智正在回答时，用户只说“好的”。</p>
+                  <p class="muted">预期：normal 模式不应把确认附和当成硬打断。</p>
+                </div>
+                <div><span class="ok">OK</span></div>
+              </div>
+              <div class="case-metrics">
+                <div><span>首轮输入音频</span><strong>8.17s</strong></div>
+                <div><span>插话音频</span><strong>0.39s</strong></div>
+                <div><span>ASR final 到 LLM 首 delta</span><strong>-</strong></div>
+                <div><span>ASR final 到可播报文本</span><strong>-</strong></div>
+                <div><span>首轮上传结束到首包</span><strong>2361.1ms</strong></div>
+                <div><span>打断到 stop</span><strong>-</strong></div>
+                <div><span>stop 后旧音频</span><strong>0 包</strong></div>
+                <div><span>stop 后新回复音频</span><strong>0 包</strong></div>
+              </div>
+              <ol class="timeline">
+                
+                <li>
+                  <strong>连接初始化完成</strong>
+                  <em>T+1523.4ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首次 ASR partial</strong>
+                  <em>T+2210.8ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首轮用户音频上传结束</strong>
+                  <em>T+9908.0ms</em>
+                  <span>阶段耗时 8167.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>首轮识别文本就绪</strong>
+                  <em>T+10241.5ms</em>
+                  <span>阶段耗时 333.5ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS start</strong>
+                  <em>T+12269.1ms</em>
+                  <span>阶段耗时 2027.6ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到首个 TTS 音频包</strong>
+                  <em>T+12269.2ms</em>
+                  <span>阶段耗时 0.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>开始注入打断音频</strong>
+                  <em>T+12987.8ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>打断音频上传结束</strong>
+                  <em>T+13415.0ms</em>
+                  <span>阶段耗时 385.9ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到插话 ASR 文本</strong>
+                  <em>T+13455.9ms</em>
+                  
+                </li>
+                
+              </ol>
+            </section>
+            
+            <section class="case-card">
+              <div class="case-head">
+                <div>
+                  <h3>短犹豫 <code>hesitation_short_partial</code></h3>
+                  <p>第 2 轮：小智正在回答时，用户只说“那个”。</p>
+                  <p class="muted">预期：normal 模式不应把短犹豫当成硬打断。</p>
+                </div>
+                <div><span class="ok">OK</span></div>
+              </div>
+              <div class="case-metrics">
+                <div><span>首轮输入音频</span><strong>8.17s</strong></div>
+                <div><span>插话音频</span><strong>0.42s</strong></div>
+                <div><span>ASR final 到 LLM 首 delta</span><strong>-</strong></div>
+                <div><span>ASR final 到可播报文本</span><strong>-</strong></div>
+                <div><span>首轮上传结束到首包</span><strong>2405.3ms</strong></div>
+                <div><span>打断到 stop</span><strong>-</strong></div>
+                <div><span>stop 后旧音频</span><strong>0 包</strong></div>
+                <div><span>stop 后新回复音频</span><strong>0 包</strong></div>
+              </div>
+              <ol class="timeline">
+                
+                <li>
+                  <strong>连接初始化完成</strong>
+                  <em>T+1523.5ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首次 ASR partial</strong>
+                  <em>T+2206.5ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首轮用户音频上传结束</strong>
+                  <em>T+9898.4ms</em>
+                  <span>阶段耗时 8167.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>首轮识别文本就绪</strong>
+                  <em>T+10270.1ms</em>
+                  <span>阶段耗时 371.7ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS start</strong>
+                  <em>T+12303.5ms</em>
+                  <span>阶段耗时 2033.5ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到首个 TTS 音频包</strong>
+                  <em>T+12303.6ms</em>
+                  <span>阶段耗时 0.1ms</span>
+                </li>
+                
+                <li>
+                  <strong>开始注入打断音频</strong>
+                  <em>T+13025.0ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>打断音频上传结束</strong>
+                  <em>T+13450.5ms</em>
+                  <span>阶段耗时 418.6ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到插话 ASR 文本</strong>
+                  <em>T+13537.2ms</em>
+                  
+                </li>
+                
+              </ol>
+            </section>
+            
+            <section class="case-card">
+              <div class="case-head">
+                <div>
+                  <h3>普通插话 <code>ordinary_final_pause</code></h3>
+                  <p>第 2 轮：小智正在回答时，用户说“我觉得这个回答还可以”这类普通完整短句。</p>
+                  <p class="muted">预期：normal 模式不应把普通插话当成硬打断，因此不要求服务端发送 tts stop。</p>
+                </div>
+                <div><span class="ok">OK</span></div>
+              </div>
+              <div class="case-metrics">
+                <div><span>首轮输入音频</span><strong>8.17s</strong></div>
+                <div><span>插话音频</span><strong>1.83s</strong></div>
+                <div><span>ASR final 到 LLM 首 delta</span><strong>-</strong></div>
+                <div><span>ASR final 到可播报文本</span><strong>-</strong></div>
+                <div><span>首轮上传结束到首包</span><strong>2384.1ms</strong></div>
+                <div><span>打断到 stop</span><strong>-</strong></div>
+                <div><span>stop 后旧音频</span><strong>0 包</strong></div>
+                <div><span>stop 后新回复音频</span><strong>0 包</strong></div>
+              </div>
+              <ol class="timeline">
+                
+                <li>
+                  <strong>连接初始化完成</strong>
+                  <em>T+1523.6ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首次 ASR partial</strong>
+                  <em>T+2203.3ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首轮用户音频上传结束</strong>
+                  <em>T+9907.8ms</em>
+                  <span>阶段耗时 8167.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>首轮识别文本就绪</strong>
+                  <em>T+10257.5ms</em>
+                  <span>阶段耗时 349.7ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS start</strong>
+                  <em>T+12291.9ms</em>
+                  <span>阶段耗时 2034.4ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到首个 TTS 音频包</strong>
+                  <em>T+12291.9ms</em>
+                  <span>阶段耗时 0.1ms</span>
+                </li>
+                
+                <li>
+                  <strong>开始注入打断音频</strong>
+                  <em>T+13013.2ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>打断音频上传结束</strong>
+                  <em>T+14900.3ms</em>
+                  <span>阶段耗时 1828.4ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到插话 ASR 文本</strong>
+                  <em>T+14935.5ms</em>
+                  
+                </li>
+                
+              </ol>
+            </section>
+            
+            <section class="case-card">
+              <div class="case-head">
+                <div>
+                  <h3>普通陈述 <code>ordinary_final_environment</code></h3>
+                  <p>第 2 轮：小智正在回答时，用户说“今天外面声音有点大”。</p>
+                  <p class="muted">预期：normal 模式不应把普通环境陈述当成硬打断。</p>
+                </div>
+                <div><span class="ok">OK</span></div>
+              </div>
+              <div class="case-metrics">
+                <div><span>首轮输入音频</span><strong>8.17s</strong></div>
+                <div><span>插话音频</span><strong>1.59s</strong></div>
+                <div><span>ASR final 到 LLM 首 delta</span><strong>-</strong></div>
+                <div><span>ASR final 到可播报文本</span><strong>-</strong></div>
+                <div><span>首轮上传结束到首包</span><strong>2375.4ms</strong></div>
+                <div><span>打断到 stop</span><strong>-</strong></div>
+                <div><span>stop 后旧音频</span><strong>0 包</strong></div>
+                <div><span>stop 后新回复音频</span><strong>0 包</strong></div>
+              </div>
+              <ol class="timeline">
+                
+                <li>
+                  <strong>连接初始化完成</strong>
+                  <em>T+1523.3ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首次 ASR partial</strong>
+                  <em>T+2200.4ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首轮用户音频上传结束</strong>
+                  <em>T+9909.5ms</em>
+                  <span>阶段耗时 8167.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>首轮识别文本就绪</strong>
+                  <em>T+10224.7ms</em>
+                  <span>阶段耗时 315.2ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS start</strong>
+                  <em>T+12284.7ms</em>
+                  <span>阶段耗时 2060.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到首个 TTS 音频包</strong>
+                  <em>T+12284.8ms</em>
+                  <span>阶段耗时 0.1ms</span>
+                </li>
+                
+                <li>
+                  <strong>开始注入打断音频</strong>
+                  <em>T+13001.8ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>打断音频上传结束</strong>
+                  <em>T+14642.8ms</em>
+                  <span>阶段耗时 1586.1ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到插话 ASR 文本</strong>
+                  <em>T+14732.1ms</em>
+                  
+                </li>
+                
+              </ol>
+            </section>
+            
+  </section>
+  <section class="panel">
+    <h2>结果明细</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>轮次</th><th>用例</th><th>类型</th><th>实际场景</th><th>ASR 识别</th><th>阶段状态</th><th>无效原因</th>
+            <th>预期 stop</th><th>实际 stop</th>
+            <th>插话音频时长</th><th>首轮上传结束到首包</th>
+            <th>打断到 stop</th><th>服务端 abort_to_stop</th><th>LLM 首 delta</th><th>可播报文本</th>
+            <th>打断后音频包</th><th>stop 后旧音频</th><th>stop 后新回复</th><th>服务端丢弃旧音频</th><th>结果</th>
+          </tr>
+        </thead>
+        <tbody>
+          
+            <tr class="">
+              <td>1</td>
+              <td><code>explicit_stop</code></td>
+              <td>明确停止</td>
+              <td>小智正在回答一段较长内容时，用户插话说“停一下”。</td>
+              <td>首轮：请用一段比较长的话介绍一下小智的全双工语音能力至少说二十秒语气自然；插话：停一</td>
+              <td>有效</td>
+              <td>-</td>
+              <td>是</td>
+              <td>是</td>
+              <td>0.57s</td>
+              <td>2326.7ms</td>
+              <td>815.0ms</td>
+              <td>0.2ms</td>
+              <td>499.2ms</td>
+              <td>499.2ms</td>
+              <td>28</td>
+              <td>0</td>
+              <td>0</td>
+              <td>0</td>
+              <td><span class="ok">OK</span></td>
+            </tr>
+            
+            <tr class="">
+              <td>1</td>
+              <td><code>explicit_wait</code></td>
+              <td>明确叫停</td>
+              <td>小智正在回答一段较长内容时，用户插话说“等等我重新问”。</td>
+              <td>首轮：请用一段比较长的话介绍一下小智的全双工语音能力至少说二十秒语气自然；插话：等等我重新</td>
+              <td>有效</td>
+              <td>-</td>
+              <td>是</td>
+              <td>是</td>
+              <td>1.47s</td>
+              <td>2313.7ms</td>
+              <td>1736.8ms</td>
+              <td>0.5ms</td>
+              <td>529.9ms</td>
+              <td>529.9ms</td>
+              <td>57</td>
+              <td>0</td>
+              <td>0</td>
+              <td>0</td>
+              <td><span class="ok">OK</span></td>
+            </tr>
+            
+            <tr class="">
+              <td>1</td>
+              <td><code>correction_wrong_target</code></td>
+              <td>纠正目标</td>
+              <td>小智正在回答时，用户插话说“不是这个，我问的是天气”。</td>
+              <td>首轮：请用一段比较长的话介绍一下小智的全双工语音能力至少说二十秒语气自然；插话：的是天气</td>
+              <td>有效</td>
+              <td>-</td>
+              <td>是</td>
+              <td>是</td>
+              <td>2.13s</td>
+              <td>2370.3ms</td>
+              <td>1395.0ms</td>
+              <td>0.4ms</td>
+              <td>529.9ms</td>
+              <td>529.9ms</td>
+              <td>48</td>
+              <td>0</td>
+              <td>0</td>
+              <td>0</td>
+              <td><span class="ok">OK</span></td>
+            </tr>
+            
+            <tr class="">
+              <td>1</td>
+              <td><code>question_weather</code></td>
+              <td>新问题</td>
+              <td>小智正在回答时，用户直接插入新的问题“那明天天气怎么样”。</td>
+              <td>首轮：请用一段比较长的话介绍一下小智的全双工语音能力至少说二十秒语气自然；插话：那明天天气怎么样</td>
+              <td>有效</td>
+              <td>-</td>
+              <td>是</td>
+              <td>是</td>
+              <td>1.32s</td>
+              <td>2369.1ms</td>
+              <td>1563.6ms</td>
+              <td>0.4ms</td>
+              <td>542.4ms</td>
+              <td>542.4ms</td>
+              <td>26</td>
+              <td>0</td>
+              <td>0</td>
+              <td>0</td>
+              <td><span class="ok">OK</span></td>
+            </tr>
+            
+            <tr class="">
+              <td>1</td>
+              <td><code>question_rephrase</code></td>
+              <td>要求换说法</td>
+              <td>小智正在回答时，用户插话说“能不能换一种说法”。</td>
+              <td>首轮：请用一段比较长的话介绍一下小智的全双工语音能力至少说二十秒语气自然；插话：能不能换一种说法</td>
+              <td>有效</td>
+              <td>-</td>
+              <td>是</td>
+              <td>是</td>
+              <td>1.32s</td>
+              <td>2368.9ms</td>
+              <td>1637.1ms</td>
+              <td>0.4ms</td>
+              <td>550.4ms</td>
+              <td>550.4ms</td>
+              <td>51</td>
+              <td>0</td>
+              <td>0</td>
+              <td>0</td>
+              <td><span class="ok">OK</span></td>
+            </tr>
+            
+            <tr class="">
+              <td>1</td>
+              <td><code>lunar_tool_query</code></td>
+              <td>工具查询</td>
+              <td>小智正在回答时，用户插话问“明天的黄历宜忌是什么”。</td>
+              <td>首轮：请用一段比较长的话介绍一下小智的全双工语音能力至少说二十秒语气自然；插话：% get_lunar</td>
+              <td>有效</td>
+              <td>-</td>
+              <td>是</td>
+              <td>是</td>
+              <td>1.94s</td>
+              <td>2370.1ms</td>
+              <td>2260.6ms</td>
+              <td>0.4ms</td>
+              <td>549.0ms</td>
+              <td>549.1ms</td>
+              <td>57</td>
+              <td>0</td>
+              <td>0</td>
+              <td>0</td>
+              <td><span class="ok">OK</span></td>
+            </tr>
+            
+            <tr class="">
+              <td>1</td>
+              <td><code>backchannel_um</code></td>
+              <td>短附和</td>
+              <td>小智正在回答时，用户只说“嗯”。</td>
+              <td>首轮：请用一段比较长的话介绍一下小智的全双工语音能力至少说二十秒语气自然；插话：嗯</td>
+              <td>有效</td>
+              <td>-</td>
+              <td>否</td>
+              <td>否</td>
+              <td>0.34s</td>
+              <td>2352.1ms</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>76</td>
+              <td>0</td>
+              <td>0</td>
+              <td>-</td>
+              <td><span class="ok">OK</span></td>
+            </tr>
+            
+            <tr class="">
+              <td>1</td>
+              <td><code>backchannel_ok</code></td>
+              <td>确认附和</td>
+              <td>小智正在回答时，用户只说“好的”。</td>
+              <td>首轮：请用一段比较长的话介绍一下小智的全双工语音能力至少说二十秒语气自然；插话：好</td>
+              <td>有效</td>
+              <td>-</td>
+              <td>否</td>
+              <td>否</td>
+              <td>0.39s</td>
+              <td>2362.6ms</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>78</td>
+              <td>0</td>
+              <td>0</td>
+              <td>-</td>
+              <td><span class="ok">OK</span></td>
+            </tr>
+            
+            <tr class="">
+              <td>1</td>
+              <td><code>hesitation_short_partial</code></td>
+              <td>短犹豫</td>
+              <td>小智正在回答时，用户只说“那个”。</td>
+              <td>首轮：请用一段比较长的话介绍一下小智的全双工语音能力至少说二十秒语气自然；插话：那个</td>
+              <td>有效</td>
+              <td>-</td>
+              <td>否</td>
+              <td>否</td>
+              <td>0.42s</td>
+              <td>2345.7ms</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>77</td>
+              <td>0</td>
+              <td>0</td>
+              <td>-</td>
+              <td><span class="ok">OK</span></td>
+            </tr>
+            
+            <tr class="">
+              <td>1</td>
+              <td><code>ordinary_final_pause</code></td>
+              <td>普通插话</td>
+              <td>小智正在回答时，用户说“我觉得这个回答还可以”这类普通完整短句。</td>
+              <td>首轮：请用一段比较长的话介绍一下小智的全双工语音能力至少说二十秒语气自然；插话：我觉得这个回答还可</td>
+              <td>有效</td>
+              <td>-</td>
+              <td>否</td>
+              <td>否</td>
+              <td>1.83s</td>
+              <td>2387.7ms</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>101</td>
+              <td>0</td>
+              <td>0</td>
+              <td>-</td>
+              <td><span class="ok">OK</span></td>
+            </tr>
+            
+            <tr class="">
+              <td>1</td>
+              <td><code>ordinary_final_environment</code></td>
+              <td>普通陈述</td>
+              <td>小智正在回答时，用户说“今天外面声音有点大”。</td>
+              <td>首轮：请用一段比较长的话介绍一下小智的全双工语音能力至少说二十秒语气自然；插话：今天外面声音有点大</td>
+              <td>有效</td>
+              <td>-</td>
+              <td>否</td>
+              <td>否</td>
+              <td>1.59s</td>
+              <td>2387.9ms</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>97</td>
+              <td>0</td>
+              <td>0</td>
+              <td>-</td>
+              <td><span class="ok">OK</span></td>
+            </tr>
+            
+            <tr class="">
+              <td>2</td>
+              <td><code>explicit_stop</code></td>
+              <td>明确停止</td>
+              <td>小智正在回答一段较长内容时，用户插话说“停一下”。</td>
+              <td>首轮：请用一段比较长的话介绍一下小智的全双工语音能力至少说二十秒语气自然；插话：停一</td>
+              <td>有效</td>
+              <td>-</td>
+              <td>是</td>
+              <td>是</td>
+              <td>0.57s</td>
+              <td>2357.3ms</td>
+              <td>804.5ms</td>
+              <td>0.7ms</td>
+              <td>534.9ms</td>
+              <td>534.9ms</td>
+              <td>29</td>
+              <td>0</td>
+              <td>0</td>
+              <td>0</td>
+              <td><span class="ok">OK</span></td>
+            </tr>
+            
+            <tr class="">
+              <td>2</td>
+              <td><code>explicit_wait</code></td>
+              <td>明确叫停</td>
+              <td>小智正在回答一段较长内容时，用户插话说“等等我重新问”。</td>
+              <td>首轮：请用一段比较长的话介绍一下小智的全双工语音能力至少说二十秒语气自然；插话：等等我重新</td>
+              <td>有效</td>
+              <td>-</td>
+              <td>是</td>
+              <td>是</td>
+              <td>1.47s</td>
+              <td>2373.2ms</td>
+              <td>1751.8ms</td>
+              <td>0.5ms</td>
+              <td>557.5ms</td>
+              <td>557.5ms</td>
+              <td>57</td>
+              <td>0</td>
+              <td>0</td>
+              <td>0</td>
+              <td><span class="ok">OK</span></td>
+            </tr>
+            
+            <tr class="">
+              <td>2</td>
+              <td><code>correction_wrong_target</code></td>
+              <td>纠正目标</td>
+              <td>小智正在回答时，用户插话说“不是这个，我问的是天气”。</td>
+              <td>首轮：请用一段比较长的话介绍一下小智的全双工语音能力至少说二十秒语气自然；插话：的是天气</td>
+              <td>有效</td>
+              <td>-</td>
+              <td>是</td>
+              <td>是</td>
+              <td>2.13s</td>
+              <td>2327.6ms</td>
+              <td>1404.8ms</td>
+              <td>0.5ms</td>
+              <td>532.2ms</td>
+              <td>532.3ms</td>
+              <td>47</td>
+              <td>0</td>
+              <td>0</td>
+              <td>0</td>
+              <td><span class="ok">OK</span></td>
+            </tr>
+            
+            <tr class="">
+              <td>2</td>
+              <td><code>question_weather</code></td>
+              <td>新问题</td>
+              <td>小智正在回答时，用户直接插入新的问题“那明天天气怎么样”。</td>
+              <td>首轮：请用一段比较长的话介绍一下小智的全双工语音能力至少说二十秒语气自然；插话：那明天天气怎么样</td>
+              <td>有效</td>
+              <td>-</td>
+              <td>是</td>
+              <td>是</td>
+              <td>1.32s</td>
+              <td>2380.4ms</td>
+              <td>1576.3ms</td>
+              <td>0.7ms</td>
+              <td>560.3ms</td>
+              <td>560.3ms</td>
+              <td>27</td>
+              <td>0</td>
+              <td>0</td>
+              <td>0</td>
+              <td><span class="ok">OK</span></td>
+            </tr>
+            
+            <tr class="">
+              <td>2</td>
+              <td><code>question_rephrase</code></td>
+              <td>要求换说法</td>
+              <td>小智正在回答时，用户插话说“能不能换一种说法”。</td>
+              <td>首轮：请用一段比较长的话介绍一下小智的全双工语音能力至少说二十秒语气自然；插话：能不能换一种说法</td>
+              <td>有效</td>
+              <td>-</td>
+              <td>是</td>
+              <td>是</td>
+              <td>1.32s</td>
+              <td>2392.6ms</td>
+              <td>1628.2ms</td>
+              <td>0.4ms</td>
+              <td>587.9ms</td>
+              <td>587.9ms</td>
+              <td>51</td>
+              <td>0</td>
+              <td>0</td>
+              <td>0</td>
+              <td><span class="ok">OK</span></td>
+            </tr>
+            
+            <tr class="">
+              <td>2</td>
+              <td><code>lunar_tool_query</code></td>
+              <td>工具查询</td>
+              <td>小智正在回答时，用户插话问“明天的黄历宜忌是什么”。</td>
+              <td>首轮：请用一段比较长的话介绍一下小智的全双工语音能力至少说二十秒语气自然；插话：% get_lunar</td>
+              <td>有效</td>
+              <td>-</td>
+              <td>是</td>
+              <td>是</td>
+              <td>1.94s</td>
+              <td>2348.0ms</td>
+              <td>2249.9ms</td>
+              <td>0.7ms</td>
+              <td>550.2ms</td>
+              <td>550.2ms</td>
+              <td>57</td>
+              <td>0</td>
+              <td>0</td>
+              <td>0</td>
+              <td><span class="ok">OK</span></td>
+            </tr>
+            
+            <tr class="">
+              <td>2</td>
+              <td><code>backchannel_um</code></td>
+              <td>短附和</td>
+              <td>小智正在回答时，用户只说“嗯”。</td>
+              <td>首轮：请用一段比较长的话介绍一下小智的全双工语音能力至少说二十秒语气自然；插话：嗯</td>
+              <td>有效</td>
+              <td>-</td>
+              <td>否</td>
+              <td>否</td>
+              <td>0.34s</td>
+              <td>2422.0ms</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>76</td>
+              <td>0</td>
+              <td>0</td>
+              <td>-</td>
+              <td><span class="ok">OK</span></td>
+            </tr>
+            
+            <tr class="">
+              <td>2</td>
+              <td><code>backchannel_ok</code></td>
+              <td>确认附和</td>
+              <td>小智正在回答时，用户只说“好的”。</td>
+              <td>首轮：请用一段比较长的话介绍一下小智的全双工语音能力至少说二十秒语气自然；插话：好</td>
+              <td>有效</td>
+              <td>-</td>
+              <td>否</td>
+              <td>否</td>
+              <td>0.39s</td>
+              <td>2361.1ms</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>77</td>
+              <td>0</td>
+              <td>0</td>
+              <td>-</td>
+              <td><span class="ok">OK</span></td>
+            </tr>
+            
+            <tr class="">
+              <td>2</td>
+              <td><code>hesitation_short_partial</code></td>
+              <td>短犹豫</td>
+              <td>小智正在回答时，用户只说“那个”。</td>
+              <td>首轮：请用一段比较长的话介绍一下小智的全双工语音能力至少说二十秒语气自然；插话：那个</td>
+              <td>有效</td>
+              <td>-</td>
+              <td>否</td>
+              <td>否</td>
+              <td>0.42s</td>
+              <td>2405.3ms</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>77</td>
+              <td>0</td>
+              <td>0</td>
+              <td>-</td>
+              <td><span class="ok">OK</span></td>
+            </tr>
+            
+            <tr class="">
+              <td>2</td>
+              <td><code>ordinary_final_pause</code></td>
+              <td>普通插话</td>
+              <td>小智正在回答时，用户说“我觉得这个回答还可以”这类普通完整短句。</td>
+              <td>首轮：请用一段比较长的话介绍一下小智的全双工语音能力至少说二十秒语气自然；插话：我觉得这个回答还可</td>
+              <td>有效</td>
+              <td>-</td>
+              <td>否</td>
+              <td>否</td>
+              <td>1.83s</td>
+              <td>2384.1ms</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>101</td>
+              <td>0</td>
+              <td>0</td>
+              <td>-</td>
+              <td><span class="ok">OK</span></td>
+            </tr>
+            
+            <tr class="">
+              <td>2</td>
+              <td><code>ordinary_final_environment</code></td>
+              <td>普通陈述</td>
+              <td>小智正在回答时，用户说“今天外面声音有点大”。</td>
+              <td>首轮：请用一段比较长的话介绍一下小智的全双工语音能力至少说二十秒语气自然；插话：今天外面声音有点大</td>
+              <td>有效</td>
+              <td>-</td>
+              <td>否</td>
+              <td>否</td>
+              <td>1.59s</td>
+              <td>2375.4ms</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>96</td>
+              <td>0</td>
+              <td>0</td>
+              <td>-</td>
+              <td><span class="ok">OK</span></td>
+            </tr>
+            
+        </tbody>
+      </table>
+    </div>
+  </section>
+  <section class="panel">
+    <h2>复现命令</h2>
+    <pre>main/xiaozhi-server/venv/bin/python main/xiaozhi-server/performance_tester/performance_tester_full_duplex_client.py \
+  --url ws://127.0.0.1:8000/xiaozhi/v1/ \
+  --interrupt-after-ms 700</pre>
+  </section>
+</main>
+</body>
+</html>

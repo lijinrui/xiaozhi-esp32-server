@@ -37,7 +37,7 @@ class TurnStartStrategyTest(unittest.TestCase):
                 self.assertEqual(result.decision, TurnStartDecision.IGNORE)
 
     def test_explicit_interrupt_starts_turn(self) -> None:
-        for text in ("停一下", "等等", "别说了", "不是这个", "我问的是天气"):
+        for text in ("停一下", "停一", "等等", "别说了", "不是这个", "我问的是天气"):
             with self.subTest(text=text):
                 result = self.strategy.decide(text)
                 self.assertEqual(result.decision, TurnStartDecision.START)
@@ -47,6 +47,11 @@ class TurnStartStrategyTest(unittest.TestCase):
         result = self.strategy.decide("那明天天气怎么样")
         self.assertEqual(result.decision, TurnStartDecision.START)
         self.assertEqual(result.reason, "question_like")
+
+    def test_ordinary_final_text_is_candidate(self) -> None:
+        result = self.strategy.decide("我觉得这个内容还可以", is_final=True)
+        self.assertEqual(result.decision, TurnStartDecision.CANDIDATE)
+        self.assertEqual(result.reason, "final_enough")
 
     def test_short_ambiguous_partial_is_candidate(self) -> None:
         result = self.strategy.decide("那个", is_final=False)
@@ -85,6 +90,15 @@ class InterruptClassifierTest(unittest.TestCase):
         self.assertEqual(result.decision, InterruptDecision.SOFT_INTERRUPT)
         self.assertFalse(result.should_cancel)
 
+    def test_ordinary_final_text_is_soft_interrupt(self) -> None:
+        result = self.classifier.classify(
+            is_speaking=True,
+            text="我觉得这个内容还可以",
+            is_final=True,
+        )
+        self.assertEqual(result.decision, InterruptDecision.SOFT_INTERRUPT)
+        self.assertFalse(result.should_cancel)
+
     def test_wake_word_hard_cancels(self) -> None:
         result = self.classifier.classify(is_speaking=True, text="", wake_word=True)
         self.assertEqual(result.decision, InterruptDecision.HARD_INTERRUPT)
@@ -93,4 +107,3 @@ class InterruptClassifierTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

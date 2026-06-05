@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>全双工仿真客户端 E2E 报告</title>
+  <style>
+    :root { --bg:#f6f7f9; --panel:#fff; --ink:#1f2933; --muted:#667085; --line:#d9dee7; --green:#13795b; --green-bg:#e8f5ef; --red:#b42318; --red-bg:#fff0ee; --amber:#854a0e; --amber-bg:#fff7d6; --blue:#175cd3; --blue-bg:#edf4ff; --shadow:0 10px 30px rgba(31,41,51,.08); }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; line-height:1.55; }
+    main { max-width:1240px; margin:0 auto; padding:28px 22px 46px; }
+    header { display:grid; grid-template-columns:1fr auto; gap:18px; align-items:end; margin-bottom:18px; }
+    h1 { margin:0 0 8px; font-size:28px; letter-spacing:0; }
+    h2 { margin:0 0 14px; font-size:18px; letter-spacing:0; }
+    h3 { margin:0 0 8px; font-size:17px; letter-spacing:0; }
+    p { margin:0; }
+    .muted { color:var(--muted); }
+    .timestamp { padding:12px 14px; border:1px solid var(--line); border-radius:6px; background:var(--panel); color:var(--muted); font-size:13px; text-align:right; }
+    .grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin:18px 0; }
+    .card,.panel,.case-card { background:var(--panel); border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow); }
+    .card { min-height:106px; padding:16px; }
+    .label { color:var(--muted); font-size:13px; }
+    .value { margin-top:8px; font-size:30px; font-weight:760; line-height:1; }
+    .note { margin-top:8px; color:var(--muted); font-size:13px; }
+    .panel { padding:18px; margin-top:14px; }
+    .case-card { padding:18px; margin-top:14px; }
+    .case-head { display:grid; grid-template-columns:1fr auto; gap:14px; align-items:start; }
+    .case-metrics { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:10px; margin:14px 0; }
+    .case-metrics div { padding:10px 12px; border:1px solid var(--line); border-radius:6px; background:#f8fafc; }
+    .case-metrics span { display:block; color:var(--muted); font-size:12px; }
+    .case-metrics strong { display:block; margin-top:4px; font-size:16px; }
+    .timeline { position:relative; display:grid; gap:8px; margin:0; padding:0; list-style:none; }
+    .timeline li { display:grid; grid-template-columns:minmax(180px,1fr) 110px minmax(120px,.7fr); gap:10px; align-items:center; padding:9px 10px; border:1px solid var(--line); border-radius:6px; background:#fff; }
+    .timeline strong { font-size:13px; }
+    .timeline em { color:var(--blue); font-style:normal; font-weight:700; }
+    .timeline span { color:var(--muted); font-size:13px; }
+    table { width:100%; border-collapse:collapse; min-width:1480px; font-size:13px; }
+    th,td { padding:10px 12px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
+    th { background:#f2f4f7; color:#344054; font-size:12px; }
+    .table-wrap { overflow-x:auto; border:1px solid var(--line); border-radius:8px; }
+    .failed { background:#fff8f7; }
+    .ok { display:inline-block; padding:3px 8px; border-radius:999px; background:var(--green-bg); color:var(--green); font-weight:700; }
+    .fail { display:inline-block; padding:3px 8px; border-radius:999px; background:var(--red-bg); color:var(--red); font-weight:700; }
+    .invalid { display:inline-block; padding:3px 8px; border-radius:999px; background:var(--amber-bg); color:var(--amber); font-weight:700; }
+    code { padding:2px 5px; border:1px solid var(--line); border-radius:4px; background:#f8fafc; font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; font-size:.92em; }
+    pre { overflow:auto; padding:14px; border-radius:6px; background:#111827; color:#fff; font-size:13px; }
+    @media (max-width:900px) { header,.grid,.case-head,.case-metrics { grid-template-columns:1fr; } main { padding:20px 14px; } .timeline li { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>全双工仿真客户端 E2E 报告</h1>
+      <p class="muted">真实 websocket 客户端仿真：首轮用户输入和播放中插话都使用 wav 音频转 Opus 后按 60ms 一帧流式发送，触发真实 ASR / LLM / function_call / TTS。</p>
+    </div>
+    <div class="timestamp">生成时间<br>2026-06-05</div>
+  </header>
+  <section class="grid">
+    <div class="card"><div class="label">通过用例</div><div class="value">1/2</div><div class="note">第 1 轮为暖机轮，其余轮次要求 LLM 首 token &lt; 1s</div></div>
+    <div class="card"><div class="label">测试轮次</div><div class="value">2</div><div class="note">每轮新建 websocket，服务进程不重启</div></div>
+    <div class="card"><div class="label">平均首轮上传结束到首包</div><div class="value">14914.1ms</div><div class="note">ASR final + LLM/function_call + TTS 首包</div></div>
+    <div class="card"><div class="label">后续轮 LLM 首 delta</div><div class="value">2215.1ms</div><div class="note">命中 &lt;1s：1/2</div></div>
+  </section>
+  <section class="panel">
+    <h2>测试口径</h2>
+    <p>仿真客户端先发送一段真实首轮用户语音，等客户端收到第一包 TTS 音频后再等待 700ms，然后发送真实插话语音。报告里的 T+ 时间都是从单个用例开始计时；“ASR final 到 LLM 首 delta”来自服务端 turn_metrics，用于判断 MLX prompt cache；“ASR final 到可播报文本”表示 function_call/direct_answer 中真正能送 TTS 的首段文本；“stop 后旧音频”只统计 stop 到下一次 TTS start 之前的音频，新 turn 回复会单独列为“stop 后新回复音频”。</p>
+  </section>
+  <section class="panel">
+    <h2>用例时间线</h2>
+    
+            <section class="case-card">
+              <div class="case-head">
+                <div>
+                  <h3>明确叫停 <code>explicit_wait</code></h3>
+                  <p>第 1 轮：小智正在回答一段较长内容时，用户插话说“等等我重新问”。</p>
+                  <p class="muted">预期：normal 模式应判定为明确打断，停止当前 TTS；如果随后有新回复，不能算作旧回复残留。</p>
+                </div>
+                <div><span class="ok">OK</span></div>
+              </div>
+              <div class="case-metrics">
+                <div><span>首轮输入音频</span><strong>8.17s</strong></div>
+                <div><span>插话音频</span><strong>1.47s</strong></div>
+                <div><span>首轮 LLM 首 delta</span><strong>3825.5ms</strong></div>
+                <div><span>插话 LLM 首 delta</span><strong>580.4ms</strong></div>
+                <div><span>插话可播报文本</span><strong>580.4ms</strong></div>
+                <div><span>插话工具</span><strong>-</strong></div>
+                <div><span>工具选择</span><strong>-</strong></div>
+                <div><span>工具执行</span><strong>-</strong></div>
+                <div><span>工具结果后首 delta</span><strong>-</strong></div>
+                <div><span>工具结果后可播报</span><strong>-</strong></div>
+                <div><span>首轮上传结束到首包</span><strong>14922.2ms</strong></div>
+                <div><span>打断到 stop</span><strong>1739.4ms</strong></div>
+                <div><span>stop 后旧音频</span><strong>0 包</strong></div>
+                <div><span>stop 后新回复音频</span><strong>0 包</strong></div>
+              </div>
+              <ol class="timeline">
+                
+                <li>
+                  <strong>连接初始化完成</strong>
+                  <em>T+1562.4ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首次 ASR partial</strong>
+                  <em>T+2251.5ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首轮用户音频上传结束</strong>
+                  <em>T+10050.7ms</em>
+                  <span>阶段耗时 8167.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>首轮识别文本就绪</strong>
+                  <em>T+10424.5ms</em>
+                  <span>阶段耗时 373.8ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS start</strong>
+                  <em>T+24972.8ms</em>
+                  <span>阶段耗时 14548.3ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到首个 TTS 音频包</strong>
+                  <em>T+24972.9ms</em>
+                  <span>阶段耗时 0.1ms</span>
+                </li>
+                
+                <li>
+                  <strong>开始注入打断音频</strong>
+                  <em>T+25678.5ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>打断音频上传结束</strong>
+                  <em>T+27211.4ms</em>
+                  <span>阶段耗时 1469.8ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS stop</strong>
+                  <em>T+27417.9ms</em>
+                  <span>阶段耗时 1739.4ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到插话 ASR 文本</strong>
+                  <em>T+27419.3ms</em>
+                  
+                </li>
+                
+              </ol>
+            </section>
+            
+            <section class="case-card">
+              <div class="case-head">
+                <div>
+                  <h3>明确叫停 <code>explicit_wait</code></h3>
+                  <p>第 2 轮：小智正在回答一段较长内容时，用户插话说“等等我重新问”。</p>
+                  <p class="muted">预期：normal 模式应判定为明确打断，停止当前 TTS；如果随后有新回复，不能算作旧回复残留。</p>
+                </div>
+                <div><span class="fail">FAIL</span></div>
+              </div>
+              <div class="case-metrics">
+                <div><span>首轮输入音频</span><strong>8.17s</strong></div>
+                <div><span>插话音频</span><strong>1.47s</strong></div>
+                <div><span>首轮 LLM 首 delta</span><strong>3852.3ms</strong></div>
+                <div><span>插话 LLM 首 delta</span><strong>577.9ms</strong></div>
+                <div><span>插话可播报文本</span><strong>577.9ms</strong></div>
+                <div><span>插话工具</span><strong>-</strong></div>
+                <div><span>工具选择</span><strong>-</strong></div>
+                <div><span>工具执行</span><strong>-</strong></div>
+                <div><span>工具结果后首 delta</span><strong>-</strong></div>
+                <div><span>工具结果后可播报</span><strong>-</strong></div>
+                <div><span>首轮上传结束到首包</span><strong>14905.9ms</strong></div>
+                <div><span>打断到 stop</span><strong>1794.6ms</strong></div>
+                <div><span>stop 后旧音频</span><strong>0 包</strong></div>
+                <div><span>stop 后新回复音频</span><strong>0 包</strong></div>
+              </div>
+              <ol class="timeline">
+                
+                <li>
+                  <strong>连接初始化完成</strong>
+                  <em>T+1524.5ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首次 ASR partial</strong>
+                  <em>T+2216.4ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>首轮用户音频上传结束</strong>
+                  <em>T+10007.2ms</em>
+                  <span>阶段耗时 8167.0ms</span>
+                </li>
+                
+                <li>
+                  <strong>首轮识别文本就绪</strong>
+                  <em>T+10347.6ms</em>
+                  <span>阶段耗时 340.4ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS start</strong>
+                  <em>T+24913.1ms</em>
+                  <span>阶段耗时 14565.5ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到首个 TTS 音频包</strong>
+                  <em>T+24913.1ms</em>
+                  <span>阶段耗时 0.1ms</span>
+                </li>
+                
+                <li>
+                  <strong>开始注入打断音频</strong>
+                  <em>T+25614.6ms</em>
+                  
+                </li>
+                
+                <li>
+                  <strong>打断音频上传结束</strong>
+                  <em>T+27150.4ms</em>
+                  <span>阶段耗时 1469.8ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到 TTS stop</strong>
+                  <em>T+27409.2ms</em>
+                  <span>阶段耗时 1794.6ms</span>
+                </li>
+                
+                <li>
+                  <strong>收到插话 ASR 文本</strong>
+                  <em>T+27410.4ms</em>
+                  
+                </li>
+                
+              </ol>
+            </section>
+            
+  </section>
+  <section class="panel">
+    <h2>结果明细</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>轮次</th><th>用例</th><th>类型</th><th>实际场景</th><th>ASR 识别</th><th>阶段状态</th><th>无效原因</th>
+            <th>预期 stop</th><th>实际 stop</th>
+            <th>插话音频时长</th><th>首轮上传结束到首包</th>
+            <th>打断到 stop</th><th>服务端 abort_to_stop</th>
+            <th>首轮 LLM 首 delta</th><th>首轮可播报文本</th>
+            <th>插话 LLM 首 delta</th><th>插话可播报文本</th>
+            <th>插话工具</th><th>工具选择</th><th>工具执行</th><th>工具结果后首 delta</th><th>工具结果后可播报</th>
+            <th>打断后音频包</th><th>stop 后旧音频</th><th>stop 后新回复</th><th>服务端丢弃旧音频</th><th>结果</th>
+          </tr>
+        </thead>
+        <tbody>
+          
+            <tr class="">
+              <td>1</td>
+              <td><code>explicit_wait</code></td>
+              <td>明确叫停</td>
+              <td>小智正在回答一段较长内容时，用户插话说“等等我重新问”。</td>
+              <td>首轮：请用一段比较长的话介绍一下小智的全双工语音能力至少说二十秒语气自然；插话：等等我重新</td>
+              <td>有效</td>
+              <td>-</td>
+              <td>是</td>
+              <td>是</td>
+              <td>1.47s</td>
+              <td>14922.2ms</td>
+              <td>1739.4ms</td>
+              <td>0.5ms</td>
+              <td>3825.5ms</td>
+              <td>3825.6ms</td>
+              <td>580.4ms</td>
+              <td>580.4ms</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>52</td>
+              <td>0</td>
+              <td>0</td>
+              <td>0</td>
+              <td><span class="ok">OK</span></td>
+            </tr>
+            
+            <tr class="failed">
+              <td>2</td>
+              <td><code>explicit_wait</code></td>
+              <td>明确叫停</td>
+              <td>小智正在回答一段较长内容时，用户插话说“等等我重新问”。</td>
+              <td>首轮：请用一段比较长的话介绍一下小智的全双工语音能力至少说二十秒语气自然；插话：等等我重新</td>
+              <td>有效</td>
+              <td>-</td>
+              <td>是</td>
+              <td>是</td>
+              <td>1.47s</td>
+              <td>14905.9ms</td>
+              <td>1794.6ms</td>
+              <td>0.6ms</td>
+              <td>3852.3ms</td>
+              <td>3852.4ms</td>
+              <td>577.9ms</td>
+              <td>577.9ms</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>-</td>
+              <td>53</td>
+              <td>0</td>
+              <td>0</td>
+              <td>0</td>
+              <td><span class="fail">FAIL</span></td>
+            </tr>
+            
+        </tbody>
+      </table>
+    </div>
+  </section>
+  <section class="panel">
+    <h2>复现命令</h2>
+    <pre>main/xiaozhi-server/venv/bin/python main/xiaozhi-server/performance_tester/performance_tester_full_duplex_client.py \
+  --url ws://127.0.0.1:8000/xiaozhi/v1/ \
+  --interrupt-after-ms 700</pre>
+  </section>
+</main>
+</body>
+</html>

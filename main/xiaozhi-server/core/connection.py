@@ -277,6 +277,34 @@ class ConnectionHandler:
         with self.turn_lock:
             self.turn_manager.mark_first_token(turn_id)
 
+    def mark_llm_first_delta(self, turn_id):
+        with self.turn_lock:
+            self.turn_manager.mark_first_delta(turn_id)
+
+    def mark_tool_choice(self, turn_id, tool_names=None):
+        with self.turn_lock:
+            self.turn_manager.mark_tool_choice(turn_id, tool_names)
+
+    def mark_tool_call_started(self, turn_id):
+        with self.turn_lock:
+            self.turn_manager.mark_tool_call_started(turn_id)
+
+    def mark_tool_result(self, turn_id):
+        with self.turn_lock:
+            self.turn_manager.mark_tool_result(turn_id)
+
+    def mark_tool_result_llm_started(self, turn_id):
+        with self.turn_lock:
+            self.turn_manager.mark_tool_result_llm_started(turn_id)
+
+    def mark_tool_result_llm_first_delta(self, turn_id):
+        with self.turn_lock:
+            self.turn_manager.mark_tool_result_llm_first_delta(turn_id)
+
+    def mark_tool_result_llm_first_token(self, turn_id):
+        with self.turn_lock:
+            self.turn_manager.mark_tool_result_llm_first_token(turn_id)
+
     def mark_tts_first_audio(self, turn_id):
         with self.turn_lock:
             self.turn_manager.mark_first_audio(turn_id)
@@ -305,6 +333,117 @@ class ConnectionHandler:
     def mark_tts_chunk_sent(self, turn_id, text=None, estimated_audio_ms=None):
         with self.turn_lock:
             self.turn_manager.mark_tts_chunk_sent(turn_id, text, estimated_audio_ms)
+
+    def _should_inject_direct_answer_tool(self):
+        """是否注入 direct_answer 虚拟工具，默认保持旧行为。"""
+        selected_llm = self.config.get("selected_module", {}).get("LLM")
+        llm_config = (self.config.get("LLM", {}) or {}).get(selected_llm, {}) or {}
+        function_call_config = llm_config.get("function_call", {}) or {}
+        return bool(function_call_config.get("direct_answer_tool", True))
+
+    def _should_inject_tool_call_fewshot(self):
+        """是否注入 function_call few-shot，支持全局默认和 LLM 覆盖。"""
+        selected_llm = self.config.get("selected_module", {}).get("LLM")
+        llm_config = (self.config.get("LLM", {}) or {}).get(selected_llm, {}) or {}
+        llm_function_config = llm_config.get("function_call", {}) or {}
+        if "inject_fewshot" in llm_function_config:
+            return bool(llm_function_config.get("inject_fewshot"))
+
+        intent_config = (
+            (self.config.get("Intent", {}) or {}).get("function_call", {}) or {}
+        )
+        by_llm = intent_config.get("inject_fewshot_by_llm", {}) or {}
+        model_name = llm_config.get("model_name")
+        for key in (selected_llm, model_name):
+            if key in by_llm:
+                return bool(by_llm[key])
+        return bool(intent_config.get("inject_fewshot", True))
+
+    def _should_use_function_tools(self, query, depth):
+        """MLX 等本地模型可按意图自适应携带工具，普通闲聊不走 tools 慢路径。"""
+        selected_llm = self.config.get("selected_module", {}).get("LLM")
+        llm_config = (self.config.get("LLM", {}) or {}).get(selected_llm, {}) or {}
+        function_call_config = llm_config.get("function_call", {}) or {}
+        if not function_call_config.get("adaptive_tools", False):
+            return True
+        if depth > 0 or query is None:
+            return True
+
+        text = str(query).strip().lower()
+        if not text:
+            return False
+
+        keywords = set(function_call_config.get("tool_trigger_keywords") or [])
+        keywords.update(
+            [
+                "打开",
+                "关闭",
+                "开灯",
+                "关灯",
+                "调高",
+                "调低",
+                "设置",
+                "音量",
+                "亮度",
+                "拍照",
+                "相机",
+                "退出",
+                "停止录音",
+                "开始录音",
+                "录音模式",
+                "切换模型",
+                "换模型",
+                "模型",
+                "天气",
+                "气温",
+                "温度",
+                "下雨",
+                "降雨",
+                "空气质量",
+                "新闻",
+                "热搜",
+                "头条",
+                "搜索",
+                "查一下",
+                "查一查",
+                "帮我查",
+                "联网",
+                "网上",
+                "最新",
+                "农历",
+                "阴历",
+                "黄历",
+                "宜忌",
+                "节气",
+                "生肖",
+                "星座",
+                "日历",
+                "状态",
+                "空调",
+                "灯",
+                "窗帘",
+                "插座",
+                "home assistant",
+                "ha",
+            ]
+        )
+
+        for llm_item in (self.config.get("LLM", {}) or {}).values():
+            if not isinstance(llm_item, dict):
+                continue
+            for alias in llm_item.get("aliases", []) or []:
+                if alias:
+                    keywords.add(str(alias).lower())
+
+        plugins = self.config.get("plugins", {}) or {}
+        ha_cfg = plugins.get("home_assistant") or plugins.get("hass_get_state") or {}
+        for device in ha_cfg.get("devices", []) or []:
+            for part in str(device).split(",")[:2]:
+                part = part.strip()
+                if part:
+                    keywords.add(part.lower())
+
+        return any(keyword and keyword in text for keyword in keywords)
 
     def commit_spoken_history(self, turn_id):
         metrics = self.turn_manager.get_turn_metrics(turn_id)
@@ -356,7 +495,21 @@ class ConnectionHandler:
             "turn_id": turn_id,
             "session_id": self.session_id,
             "cancel_reason": metrics.get("cancel_reason"),
+            "llm_first_delta_ms": delta_ms(started_at, metrics.get("llm_first_delta_at")),
             "llm_first_token_ms": delta_ms(started_at, metrics.get("llm_first_token_at")),
+            "tool_names": metrics.get("tool_names") or [],
+            "tool_choice_ms": delta_ms(started_at, metrics.get("tool_choice_at")),
+            "tool_call_ms": delta_ms(
+                metrics.get("tool_call_started_at"), metrics.get("tool_result_at")
+            ),
+            "tool_result_llm_first_delta_ms": delta_ms(
+                metrics.get("tool_result_llm_started_at"),
+                metrics.get("tool_result_llm_first_delta_at"),
+            ),
+            "tool_result_llm_first_token_ms": delta_ms(
+                metrics.get("tool_result_llm_started_at"),
+                metrics.get("tool_result_llm_first_token_at"),
+            ),
             "tts_first_audio_ms": delta_ms(started_at, metrics.get("tts_first_audio_at")),
             "abort_to_stop_ms": delta_ms(abort_at, stop_at),
             "stale_packets": stale_audio_packets,
@@ -746,6 +899,8 @@ class ConnectionHandler:
         确保模型在处理用户消息前最后看到的是"不调工具"的行为模式。
         """
         if self.intent_type != "function_call":
+            return
+        if not self._should_inject_tool_call_fewshot():
             return
         if not hasattr(self, "func_handler") or self.func_handler is None:
             return
@@ -1205,11 +1360,16 @@ class ConnectionHandler:
                 self.intent_type == "function_call"
                 and hasattr(self, "func_handler")
                 and not force_final_answer
+                and self._should_use_function_tools(query, depth)
         ):
             functions = list(self.func_handler.get_functions())
             # 仅在第一层调用时注入 direct_answer 虚拟工具
             # 递归调用（depth>0）不注入，避免模型在生成文本回复时再次调 direct_answer 导致循环
-            if functions is not None and depth == 0:
+            if (
+                functions is not None
+                and depth == 0
+                and self._should_inject_direct_answer_tool()
+            ):
                 functions.append(DIRECT_ANSWER_TOOL)
 
         response_message = []
@@ -1306,6 +1466,12 @@ class ConnectionHandler:
                     break
                 if self.intent_type == "function_call" and functions is not None:
                     content, tools_call = response
+                    if (content is not None and len(content) > 0) or (
+                        tools_call is not None and len(tools_call) > 0
+                    ):
+                        self.mark_llm_first_delta(turn_id)
+                        if depth > 0:
+                            self.mark_tool_result_llm_first_delta(turn_id)
                     # 流式检测 emotion 标记 [[emotion:xxx]]，实时下发表情/动作
                     if content is not None and not tool_call_flag:
                         clean_text, emotions = self._extract_emotion_tags(content)
@@ -1326,6 +1492,14 @@ class ConnectionHandler:
                     if tools_call is not None and len(tools_call) > 0:
                         tool_call_flag = True
                         self._merge_tool_calls(tool_calls_list, tools_call)
+                        self.mark_tool_choice(
+                            turn_id,
+                            [
+                                tc.get("name")
+                                for tc in tool_calls_list
+                                if tc.get("name")
+                            ],
+                        )
 
                     # 流式提取 direct_answer 的 response 参数，实时送 TTS
                     # 使用安全缓冲区，防止 JSON 闭合符号泄漏到 TTS
@@ -1348,6 +1522,8 @@ class ConnectionHandler:
                                     new_part = self._clean_response_garbage(new_part)
                                     if new_part:
                                         self.mark_llm_first_token(turn_id)
+                                        if depth > 0:
+                                            self.mark_tool_result_llm_first_token(turn_id)
                                         tc["_da_sent"] = safe_end
                                         self.tts.tts_text_queue.put(
                                             TTSMessageDTO(
@@ -1360,6 +1536,10 @@ class ConnectionHandler:
                                         )
                 else:
                     content = response
+                    if content is not None and len(content) > 0:
+                        self.mark_llm_first_delta(turn_id)
+                        if depth > 0:
+                            self.mark_tool_result_llm_first_delta(turn_id)
                     # 流式检测 emotion 标记 [[emotion:xxx]]，实时下发表情/动作
                     if content is not None and not tool_call_flag:
                         clean_text, emotions = self._extract_emotion_tags(content)
@@ -1383,6 +1563,8 @@ class ConnectionHandler:
                 if content is not None and len(content) > 0:
                     if not tool_call_flag:
                         self.mark_llm_first_token(turn_id)
+                        if depth > 0:
+                            self.mark_tool_result_llm_first_token(turn_id)
                         response_message.append(content)
                         enqueue_tts_text(content)
 
@@ -1433,6 +1615,9 @@ class ConnectionHandler:
                                     ensure_ascii=False,
                                 ),
                             }
+                        )
+                        self.mark_tool_choice(
+                            turn_id, [content_arguments_json.get("name")]
                         )
                     except Exception as e:
                         bHasError = True
@@ -1545,6 +1730,7 @@ class ConnectionHandler:
 
                 for future, tool_call_data, tool_input in futures_with_data:
                     try:
+                        self.mark_tool_call_started(turn_id)
                         if (
                             slow_tool_notice_enabled
                             and not slow_tool_notice_sent
@@ -1584,6 +1770,7 @@ class ConnectionHandler:
                                 tool_call_timeout,
                             )
                         tool_results.append((result, tool_call_data))
+                        self.mark_tool_result(turn_id)
                         # 使用公共方法上报工具调用结果
                         enqueue_tool_report(self, tool_call_data['name'], tool_input, str(result.result) if result.result else None, report_tool_call=False)
 
@@ -1601,6 +1788,7 @@ class ConnectionHandler:
                             ActionResponse(action=Action.ERROR, result="哎呀，网络遇到点问题，请稍后再试下！"),
                             tool_call_data
                         ))
+                        self.mark_tool_result(turn_id)
                         # 上报工具调用错误
                         enqueue_tool_report(self, tool_call_data['name'], tool_input, str(e), report_tool_call=False)
                     finally:
@@ -1755,6 +1943,7 @@ class ConnectionHandler:
                         )
                     )
 
+            self.mark_tool_result_llm_started(turn_id)
             self.chat(None, depth=depth + 1, turn_id=turn_id)
 
     def _report_worker(self):

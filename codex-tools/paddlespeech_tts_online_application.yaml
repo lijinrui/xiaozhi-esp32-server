@@ -1,0 +1,24 @@
+host: 0.0.0.0
+port: 8092
+protocol: websocket
+engine_list:
+  - tts_online
+
+tts_online:
+  device: cpu
+  am: fastspeech2_csmsc
+  am_config: /Users/lijinrui/.paddlespeech/models/fastspeech2_csmsc-zh/1.0/fastspeech2_nosil_baker_ckpt_0.4/default.yaml
+  am_ckpt: /Users/lijinrui/.paddlespeech/models/fastspeech2_csmsc-zh/1.0/fastspeech2_nosil_baker_ckpt_0.4/snapshot_iter_76000.pdz
+  am_stat: /Users/lijinrui/.paddlespeech/models/fastspeech2_csmsc-zh/1.0/fastspeech2_nosil_baker_ckpt_0.4/speech_stats.npy
+  phones_dict: /Users/lijinrui/.paddlespeech/models/fastspeech2_csmsc-zh/1.0/fastspeech2_nosil_baker_ckpt_0.4/phone_id_map.txt
+  tones_dict: null
+  speaker_dict: null
+  voc: hifigan_csmsc
+  voc_config: /Users/lijinrui/.paddlespeech/models/hifigan_csmsc-zh/1.0/hifigan_csmsc_ckpt_0.1.1/default.yaml
+  voc_ckpt: /Users/lijinrui/.paddlespeech/models/hifigan_csmsc-zh/1.0/hifigan_csmsc_ckpt_0.1.1/snapshot_iter_2500000.pdz
+  voc_stat: /Users/lijinrui/.paddlespeech/models/hifigan_csmsc-zh/1.0/hifigan_csmsc_ckpt_0.1.1/feats_stats.npy
+  lang: zh
+  am_block: 42
+  am_pad: 12
+  voc_block: 14
+  voc_pad: 14
