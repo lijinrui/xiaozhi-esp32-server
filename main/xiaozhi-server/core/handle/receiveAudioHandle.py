@@ -12,6 +12,10 @@ from core.voice.interrupt_classifier import (
     InterruptDecision,
     RuleBasedInterruptClassifier,
 )
+from core.voice.barge_in_config import (
+    BARGE_IN_MODE_NORMAL,
+    resolve_barge_in_config,
+)
 from plugins_func.functions.recording_mode import (
     append_recording,
     exit_recording_mode,
@@ -95,17 +99,29 @@ async def startToChat(conn: "ConnectionHandler", text):
             await max_out_size(conn)
             return
 
-    # manual 模式下不打断正在播放的内容；部分流式ASR也可配置为播放中继续识别/送LLM
+    # manual 模式下不打断正在播放的内容。
+    # barge_in_mode:
+    #   off: 播放中不打断
+    #   normal: 只有明确插话才打断
+    #   sensitive: 可疑插话也打断
+    barge_in_mode = BARGE_IN_MODE_NORMAL
     interrupt_tts_on_segment = True
     enable_interrupt_classifier = True
+    interrupt_soft_as_hard = False
     try:
         selected_asr = conn.config.get("selected_module", {}).get("ASR")
         asr_config = conn.config.get("ASR", {}).get(selected_asr, {})
-        interrupt_tts_on_segment = asr_config.get("interrupt_tts_on_segment", True)
-        enable_interrupt_classifier = asr_config.get("enable_interrupt_classifier", True)
+        (
+            barge_in_mode,
+            interrupt_tts_on_segment,
+            enable_interrupt_classifier,
+            interrupt_soft_as_hard,
+        ) = resolve_barge_in_config(asr_config)
     except Exception:
+        barge_in_mode = BARGE_IN_MODE_NORMAL
         interrupt_tts_on_segment = True
         enable_interrupt_classifier = True
+        interrupt_soft_as_hard = False
 
     if (
         conn.client_is_speaking
@@ -121,14 +137,20 @@ async def startToChat(conn: "ConnectionHandler", text):
                 is_final=True,
             )
             conn.logger.bind(tag=TAG).info(
-                f"播放中ASR分段打断判断: decision={interrupt.decision.value}, "
+                f"播放中ASR分段打断判断: mode={barge_in_mode}, decision={interrupt.decision.value}, "
                 f"reason={interrupt.reason}, text={actual_text}"
             )
             if interrupt.decision == InterruptDecision.IGNORE:
                 return
-            if interrupt.decision == InterruptDecision.SOFT_INTERRUPT:
+            if (
+                interrupt.decision == InterruptDecision.SOFT_INTERRUPT
+                and not interrupt_soft_as_hard
+            ):
                 return
-            await handleAbortMessage(conn, reason=f"hard_interrupt:{interrupt.reason}")
+            await handleAbortMessage(
+                conn,
+                reason=f"{interrupt.decision.value}:{interrupt.reason}",
+            )
         else:
             await handleAbortMessage(conn)
     elif conn.client_is_speaking and conn.client_listen_mode != "manual":
