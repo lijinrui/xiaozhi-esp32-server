@@ -51,6 +51,13 @@ class SimpleHttpServer:
                             web.options(
                                 "/xiaozhi/ota/", self.ota_handler.handle_options
                             ),
+                            web.get("/xiaozhi/ota/wan/", self.ota_handler.handle_get),
+                            web.post(
+                                "/xiaozhi/ota/wan/", self.ota_handler.handle_post
+                            ),
+                            web.options(
+                                "/xiaozhi/ota/wan/", self.ota_handler.handle_options
+                            ),
                             # 下载接口，仅提供 data/bin/*.bin 下载
                             web.get(
                                 "/xiaozhi/ota/download/{filename}",

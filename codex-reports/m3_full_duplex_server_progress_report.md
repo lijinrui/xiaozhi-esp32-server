@@ -211,4 +211,3 @@ PC wav/Opus 注入测试
 main/xiaozhi-server/config/assets/wakeup_words/ed76d459636c2481aec828516c1b4f54.wav
 main/xiaozhi-server/core/providers/tts/GPT-SoVITS-V3
 ```
-

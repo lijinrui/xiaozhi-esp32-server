@@ -109,7 +109,10 @@ class ConnectionHandler:
         self.websocket: websockets.ServerConnection | None = None
         self.headers = None
         self.device_id = None
+        self.device_board_name = None
+        self.device_board_version = None
         self.client_ip = None
+        self.current_query = None
         self.prompt = None
         self.welcome_msg = None
         self.max_output_size = 0
@@ -229,6 +232,7 @@ class ConnectionHandler:
     def begin_turn(self, query=None):
         """开始新的用户 turn。必须早于 STT/TTS/LLM 输出创建。"""
         self.client_abort = False
+        self.current_query = query
         with self.turn_lock:
             turn_id = self.turn_manager.begin_turn(query, source="chat")
             self.turn_seq = self.turn_manager.turn_seq
@@ -397,9 +401,13 @@ class ConnectionHandler:
                 "天气",
                 "气温",
                 "温度",
+                "预报",
                 "下雨",
                 "降雨",
                 "空气质量",
+                "风力",
+                "风向",
+                "穿衣",
                 "新闻",
                 "热搜",
                 "头条",
@@ -886,11 +894,15 @@ class ConnectionHandler:
             self.config["prompt"],
             self.device_id,
             self.client_ip,
-            emoji_enabled=(self.features or {}).get("emoji", True),
+            emoji_enabled=self.supports_emoji(),
         )
         if enhanced_prompt:
             self.change_system_prompt(enhanced_prompt)
             self.logger.bind(tag=TAG).debug("系统提示词已增强更新")
+
+    def supports_emoji(self):
+        """默认启用表情；只有客户端明确声明 emoji=false 时才关闭。"""
+        return bool((self.features or {}).get("emoji", True))
 
     def _inject_tool_call_fewshot(self):
         """注入工具调用 few-shot 示例到对话历史。
@@ -1336,6 +1348,13 @@ class ConnectionHandler:
                 self.logger.bind(tag=TAG).debug(f"跳过旧turn递归chat: {turn_id}")
                 return None
 
+        if depth == 0 and self._should_pre_route_weather(query):
+            if self._pre_route_weather_query(query, turn_id, current_sentence_id):
+                return True
+        if depth == 0 and self._should_pre_route_hass(query):
+            if self._pre_route_hass_query(query, turn_id, current_sentence_id):
+                return True
+
         # 设置最大递归深度，避免无限循环，可根据实际需求调整
         MAX_DEPTH = 5
         force_final_answer = False  # 标记是否强制最终回答
@@ -1456,6 +1475,9 @@ class ConnectionHandler:
         tool_calls_list = []  # 格式: [{"id": "", "name": "", "arguments": ""}]
         content_arguments = ""
         emotion_flag = True
+        emotion_seen = False
+        emotion_sent = False
+        emotion_tag_buffer = ""
         try:
             for response in llm_responses:
                 if self.client_abort or not self.is_current_turn(turn_id):
@@ -1474,13 +1496,19 @@ class ConnectionHandler:
                             self.mark_tool_result_llm_first_delta(turn_id)
                     # 流式检测 emotion 标记 [[emotion:xxx]]，实时下发表情/动作
                     if content is not None and not tool_call_flag:
-                        clean_text, emotions = self._extract_emotion_tags(content)
+                        clean_text, emotions, emotion_tag_buffer = self._extract_emotion_tags_stream(
+                            content,
+                            emotion_tag_buffer,
+                        )
                         for emotion in emotions:
-                            if (self.features or {}).get("emoji", True):
+                            emotion_seen = True
+                            if self.supports_emoji():
                                 asyncio.run_coroutine_threadsafe(
                                     textUtils.send_emotion_direct(self, emotion),
                                     self.loop,
                                 )
+                                emotion_flag = False
+                                emotion_sent = True
                         content = clean_text
                     if content is not None and len(content) > 0:
                         content_arguments += content
@@ -1508,11 +1536,20 @@ class ConnectionHandler:
                         if tc["name"] == "direct_answer" and tc.get("arguments"):
                             da_text, da_emotion = self._extract_direct_answer_response(tc["arguments"])
                             # 如有 emotion，实时发给数字人
-                            if da_emotion and (self.features or {}).get("emoji", True):
+                            if (
+                                da_emotion
+                                and not tc.get("_da_emotion_sent")
+                                and self.supports_emoji()
+                            ):
                                 asyncio.run_coroutine_threadsafe(
                                     textUtils.send_emotion_direct(self, da_emotion),
                                     self.loop,
                                 )
+                                tc["_da_emotion_sent"] = True
+                                emotion_flag = False
+                                emotion_sent = True
+                            elif da_emotion:
+                                emotion_seen = True
                             sent_len = tc.get("_da_sent", 0)
                             if da_text and len(da_text) > sent_len:
                                 safe_end = max(sent_len, len(da_text) - _DA_STREAM_BUFFER)
@@ -1542,23 +1579,30 @@ class ConnectionHandler:
                             self.mark_tool_result_llm_first_delta(turn_id)
                     # 流式检测 emotion 标记 [[emotion:xxx]]，实时下发表情/动作
                     if content is not None and not tool_call_flag:
-                        clean_text, emotions = self._extract_emotion_tags(content)
+                        clean_text, emotions, emotion_tag_buffer = self._extract_emotion_tags_stream(
+                            content,
+                            emotion_tag_buffer,
+                        )
                         for emotion in emotions:
-                            if (self.features or {}).get("emoji", True):
+                            emotion_seen = True
+                            if self.supports_emoji():
                                 asyncio.run_coroutine_threadsafe(
                                     textUtils.send_emotion_direct(self, emotion),
                                     self.loop,
                                 )
+                                emotion_flag = False
+                                emotion_sent = True
                         content = clean_text
 
                 # 在llm回复中获取情绪表情，一轮对话只在开头获取一次
                 if emotion_flag and content is not None and content.strip():
-                    if (self.features or {}).get("emoji", True):
+                    if self.supports_emoji():
                         asyncio.run_coroutine_threadsafe(
                             textUtils.get_emotion(self, content),
                             self.loop,
                         )
                     emotion_flag = False
+                    emotion_sent = True
 
                 if content is not None and len(content) > 0:
                     if not tool_call_flag:
@@ -1595,6 +1639,30 @@ class ConnectionHandler:
                 self.mark_tts_chunk_dropped(turn_id, dropped_chunks)
             self.logger.bind(tag=TAG).debug(f"LLM流结束后丢弃旧turn: {turn_id}")
             return None
+        if emotion_tag_buffer and not tool_call_flag:
+            clean_text, emotions = self._extract_emotion_tags(emotion_tag_buffer)
+            for emotion in emotions:
+                emotion_seen = True
+                if self.supports_emoji():
+                    asyncio.run_coroutine_threadsafe(
+                        textUtils.send_emotion_direct(self, emotion),
+                        self.loop,
+                    )
+                    emotion_sent = True
+            if clean_text.strip():
+                response_message.append(clean_text)
+                enqueue_tts_text(clean_text)
+            emotion_tag_buffer = ""
+        if (
+            (emotion_seen or emotion_sent)
+            and not tool_call_flag
+            and not response_message
+            and self.is_current_turn(turn_id)
+        ):
+            ack_text = self.config.get("emotion_only_ack_text", "好的")
+            if ack_text:
+                response_message.append(ack_text)
+                enqueue_tts_text(ack_text)
         if not tool_call_flag:
             flush_tts_text()
         # 处理function call
@@ -1662,6 +1730,9 @@ class ConnectionHandler:
                             if self.is_current_turn(turn_id):
                                 self.tts.store_tts_text(current_sentence_id, da_response)
                                 self.dialogue.put(Message(role="assistant", content=da_response))
+                                self.logger.bind(tag=TAG).info(
+                                    f"大模型输出: {da_response}"
+                                )
                         # emotion 已经由流式阶段发送，这里记录日志即可
                         if da_emotion:
                             self.logger.bind(tag=TAG).debug(f"direct_answer emotion: {da_emotion}")
@@ -1691,6 +1762,9 @@ class ConnectionHandler:
                     streamed_text = "".join(response_message)
                     self.tts.store_tts_text(current_sentence_id, streamed_text)
                     self.dialogue.put(Message(role="assistant", content=streamed_text))
+                    self.logger.bind(tag=TAG).info(
+                        f"大模型输出: {streamed_text}"
+                    )
                 response_message.clear()
 
                 # 收集所有工具调用的 Future
@@ -1810,6 +1884,7 @@ class ConnectionHandler:
             text_buff = "".join(response_message)
             self.tts.store_tts_text(current_sentence_id, text_buff)
             self.dialogue.put(Message(role="assistant", content=text_buff))
+            self.logger.bind(tag=TAG).info(f"大模型输出: {text_buff}")
 
         if depth == 0 and self.is_current_turn(turn_id):
             self.tts.tts_text_queue.put(
@@ -1945,6 +2020,282 @@ class ConnectionHandler:
 
             self.mark_tool_result_llm_started(turn_id)
             self.chat(None, depth=depth + 1, turn_id=turn_id)
+
+    def _should_pre_route_weather(self, query):
+        if not query:
+            return False
+        text = str(query).strip()
+        if not text:
+            return False
+        weather_keywords = (
+            "天气",
+            "气温",
+            "温度",
+            "下雨",
+            "有雨",
+            "降雨",
+            "下雪",
+            "有雪",
+            "空气质量",
+            "预报",
+            "穿衣",
+            "冷不冷",
+            "热不热",
+        )
+        if any(keyword in text for keyword in weather_keywords):
+            return True
+        # ASR 偶尔会把“天气”截成“天”，例如“查一下今天的天”。
+        return bool(re.search(r"(查|看|问).{0,4}(今天|明天|后天)的天$", text))
+
+    def _extract_weather_location_from_query(self, query):
+        text = str(query or "").strip()
+        if not text:
+            return None
+        text = re.sub(
+            r"^(帮我|给我|请|麻烦)?(查一下|查查|查|看一下|看看|看|问一下)?",
+            "",
+            text,
+        ).strip()
+        text = re.sub(
+            r"(怎么样|怎么|怎样|如何|咋样|呢|啊|呀|吗|嘛|吧|？|\\?)$",
+            "",
+            text,
+        ).strip()
+        text = re.sub(r"(今天|明天|后天|现在|当前|最近|未来|这几天|这周)", "", text)
+        text = re.sub(
+            r"(的)?(天气|气温|温度|下雨|有雨|降雨|下雪|有雪|空气质量|预报|穿衣建议|穿衣|天)$",
+            "",
+            text,
+        ).strip()
+
+        non_location_tokens = {
+            "天气",
+            "气温",
+            "温度",
+            "预报",
+            "怎么",
+            "怎样",
+            "如何",
+            "咋样",
+            "查",
+            "看",
+            "问",
+            "本地",
+            "当地",
+            "这里",
+            "这边",
+            "附近",
+            "当前位置",
+        }
+        if (
+            not text
+            or text in non_location_tokens
+            or any(token in text for token in non_location_tokens)
+        ):
+            return None
+        if len(text) > 12:
+            return None
+        return text
+
+    def _pre_route_weather_query(self, query, turn_id, current_sentence_id):
+        if not getattr(self, "func_handler", None) or not self.func_handler.has_tool("get_weather"):
+            return False
+        try:
+            from plugins_func.functions.get_weather import get_weather
+
+            arguments = {"lang": "zh_CN"}
+            location = self._extract_weather_location_from_query(query)
+            if location:
+                arguments["location"] = location
+            self.logger.bind(tag=TAG).info(
+                f"天气请求预路由: query={query}, arguments={arguments}"
+            )
+            result = get_weather(self, **arguments)
+            tool_call_data = {
+                "id": f"weather_pre_route_{uuid.uuid4().hex}",
+                "name": "get_weather",
+                "arguments": json.dumps(arguments, ensure_ascii=False),
+            }
+            self.mark_tool_choice(turn_id, ["get_weather"])
+            self.mark_tool_result_llm_started(turn_id)
+            self._handle_function_result([(result, tool_call_data)], 0, turn_id=turn_id)
+            if self.is_current_turn(turn_id):
+                self.tts.tts_text_queue.put(
+                    TTSMessageDTO(
+                        sentence_id=current_sentence_id,
+                        sentence_type=SentenceType.LAST,
+                        content_type=ContentType.ACTION,
+                        turn_id=turn_id,
+                    )
+                )
+            return True
+        except Exception as exc:
+            self.logger.bind(tag=TAG).warning(f"天气请求预路由失败，回退LLM: {exc}")
+            return False
+
+    def _should_pre_route_hass(self, query):
+        if not query:
+            return False
+        text = str(query).strip()
+        if not text:
+            return False
+        action_words = (
+            "打开",
+            "关闭",
+            "开一下",
+            "关一下",
+            "开灯",
+            "关灯",
+            "拉开",
+            "合上",
+            "暂停",
+            "继续",
+            "调亮",
+            "调暗",
+        )
+        if not any(word in text for word in action_words):
+            return False
+        devices = self._get_hass_devices()
+        if not devices:
+            return False
+        if any(device["room"] in text or device["name"] in text for device in devices):
+            return True
+        controllable_words = ("灯", "窗帘", "帘", "热水器", "空调", "开关", "插座")
+        return any(word in text for word in controllable_words)
+
+    def _get_hass_devices(self):
+        plugins = self.config.get("plugins", {}) or {}
+        ha_cfg = plugins.get("home_assistant") or plugins.get("hass_get_state") or {}
+        devices = []
+        for item in ha_cfg.get("devices", []) or []:
+            parts = [part.strip() for part in str(item).split(",")]
+            if len(parts) < 3:
+                continue
+            devices.append({"room": parts[0], "name": parts[1], "entity_id": parts[2]})
+        return devices
+
+    def _extract_hass_action(self, query):
+        text = str(query or "")
+        if any(word in text for word in ("关闭", "关掉", "关上", "关一下", "关灯", "合上")):
+            return "turn_off"
+        if any(word in text for word in ("打开", "开启", "开一下", "开灯", "拉开")):
+            return "turn_on"
+        return None
+
+    def _match_hass_devices(self, query):
+        text = str(query or "")
+        devices = self._get_hass_devices()
+        rooms = {device["room"] for device in devices if device["room"] in text}
+        explicit_matches = [
+            device
+            for device in devices
+            if (not rooms or device["room"] in rooms) and device["name"] in text
+        ]
+        if explicit_matches:
+            return explicit_matches
+
+        matched = []
+        if not rooms:
+            return matched
+        for device in devices:
+            room_hit = device["room"] in rooms
+            generic_light = "灯" in text and "灯" in device["name"]
+            generic_cover = any(word in text for word in ("窗帘", "帘")) and "窗帘" in device["name"]
+            if room_hit and (generic_light or generic_cover):
+                matched.append(device)
+        if matched:
+            return matched
+        return []
+
+    def _send_preroute_text_response(self, text, turn_id, current_sentence_id):
+        if not text or not self.is_current_turn(turn_id):
+            return
+        self.tts.tts_text_queue.put(
+            TTSMessageDTO(
+                sentence_id=current_sentence_id,
+                sentence_type=SentenceType.MIDDLE,
+                content_type=ContentType.TEXT,
+                content_detail=text,
+                turn_id=turn_id,
+            )
+        )
+        self.tts.store_tts_text(current_sentence_id, text)
+        self.dialogue.put(Message(role="assistant", content=text))
+        self.logger.bind(tag=TAG).info(f"预路由输出: {text}")
+
+    def _pre_route_hass_query(self, query, turn_id, current_sentence_id):
+        action = self._extract_hass_action(query)
+        if not action:
+            return False
+        devices = self._match_hass_devices(query)
+        if not devices:
+            self.logger.bind(tag=TAG).info(f"HA请求预路由未找到设备: query={query}")
+            self._send_preroute_text_response(
+                "我没找到这个设备，所以没有执行操作。",
+                turn_id,
+                current_sentence_id,
+            )
+            if self.is_current_turn(turn_id):
+                self.tts.tts_text_queue.put(
+                    TTSMessageDTO(
+                        sentence_id=current_sentence_id,
+                        sentence_type=SentenceType.LAST,
+                        content_type=ContentType.ACTION,
+                        turn_id=turn_id,
+                    )
+                )
+            return True
+        try:
+            from plugins_func.functions.hass_set_state import hass_set_state
+
+            self.logger.bind(tag=TAG).info(
+                "HA请求预路由: "
+                f"query={query}, action={action}, devices={[d['entity_id'] for d in devices]}"
+            )
+            results = []
+            failures = []
+            for device in devices:
+                result = hass_set_state(
+                    self,
+                    entity_id=device["entity_id"],
+                    state={"type": action},
+                )
+                result_text = result.result or result.response or ""
+                results.append((device, result_text))
+                if result.action == Action.ERROR or "失败" in result_text or "错误" in result_text:
+                    failures.append((device, result_text))
+
+            self.mark_tool_choice(turn_id, ["hass_set_state"])
+            self.mark_tool_result_llm_started(turn_id)
+            if failures:
+                names = "、".join(device["name"] for device, _ in failures)
+                detail = failures[0][1] if failures[0][1] else "执行失败"
+                response_text = f"{names}没有操作成功，{detail}"
+            else:
+                room_names = sorted({device["room"] for device, _ in results})
+                target_names = [device["name"] for device, _ in results]
+                verb = "打开" if action == "turn_on" else "关闭"
+                if len(room_names) == 1 and len(results) > 1:
+                    response_text = f"已{verb}{room_names[0]}的灯。"
+                elif len(results) == 1:
+                    response_text = f"已{verb}{target_names[0]}。"
+                else:
+                    response_text = f"已{verb}{'、'.join(target_names)}。"
+
+            self._send_preroute_text_response(response_text, turn_id, current_sentence_id)
+            if self.is_current_turn(turn_id):
+                self.tts.tts_text_queue.put(
+                    TTSMessageDTO(
+                        sentence_id=current_sentence_id,
+                        sentence_type=SentenceType.LAST,
+                        content_type=ContentType.ACTION,
+                        turn_id=turn_id,
+                    )
+                )
+            return True
+        except Exception as exc:
+            self.logger.bind(tag=TAG).warning(f"HA请求预路由失败，回退LLM: {exc}")
+            return False
 
     def _report_worker(self):
         """聊天记录上报工作线程"""
@@ -2247,6 +2598,38 @@ class ConnectionHandler:
         emotions.extend(m.group(1) for m in self._EMOTION_TAG_RE_LOOSE.finditer(clean_text))
         clean_text = self._EMOTION_TAG_RE_LOOSE.sub('', clean_text)
         return clean_text, emotions
+
+    @staticmethod
+    def _looks_like_incomplete_emotion_tag(text: str) -> bool:
+        if not text:
+            return False
+        stripped = text.lstrip()
+        if not stripped:
+            return False
+        full_prefix = "[[emotion:"
+        loose_prefix = "emotion:"
+        if full_prefix.startswith(stripped) or loose_prefix.startswith(stripped):
+            return True
+        if stripped.startswith(full_prefix) and "]]" not in stripped and len(stripped) <= 40:
+            return True
+        if stripped.startswith(loose_prefix) and not stripped.endswith("]") and len(stripped) <= 32:
+            return True
+        return False
+
+    def _extract_emotion_tags_stream(self, text: str, pending: str = "") -> tuple:
+        """流式提取 emotion 标记，允许 [[emotion:xxx]] 被拆在多个 delta 中。"""
+        combined = f"{pending}{text or ''}"
+        if not combined:
+            return "", [], ""
+        stripped = combined.lstrip()
+        if stripped.startswith("[[emotion:") and "]]" not in stripped and len(stripped) <= 40:
+            return "", [], combined
+        clean_text, emotions = self._extract_emotion_tags(combined)
+        if emotions:
+            return clean_text, emotions, ""
+        if self._looks_like_incomplete_emotion_tag(combined):
+            return "", [], combined
+        return combined, [], ""
 
     @staticmethod
     def _clean_response_garbage(text):

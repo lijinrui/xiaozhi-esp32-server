@@ -16,8 +16,10 @@ server:
   # 如果按默认的写法，ota接口会自动生成websocket地址，并输出在启动日志里，这个地址你可以直接用浏览器访问ota接口确认一下
   # 当你使用docker部署或使用公网部署(使用ssl、域名)时，不一定准确
   # 所以如果你使用docker部署时，将websocket设置成局域网地址
-  # 如果你使用公网部署时，将vwebsocket设置成公网地址
+  # 如果你使用公网部署时，将websocket_wan设置成公网地址
   websocket: ws://你的ip或者域名:端口号/xiaozhi/v1/
+  # 公网OTA地址(/xiaozhi/ota/wan/)向设备下发的websocket地址
+  websocket_wan: wss://你的域名/xiaozhi/v1/
   # 视觉分析接口地址
   # 向设备发送的视觉分析的接口地址
   # 如果按下面默认的写法，系统会自动生成视觉识别地址，并输出在启动日志里，这个地址你可以直接用浏览器访问确认一下
@@ -89,6 +91,9 @@ enable_websocket_ping: false
 #   0: 使用精确时间控制，严格匹配音频帧率（默认，运行时按音频帧率计算）
 #   > 0: 使用固定延迟（毫秒）发送，例如: 60
 tts_audio_send_delay: 0
+# TTS起播时先发送多少帧Opus静音，给设备播放器预热，避免吞掉首字
+# 每帧约60ms；如果仍丢首字，可以调到3
+tts_start_padding_frames: 2
 
 exit_commands:
   - "退出"
@@ -148,6 +153,8 @@ plugins:
     api_host: "mj7p3y7naa.re.qweatherapi.com"
     api_key: "a861d0d5e7bf4ee1a83d9a9e4f96d4da"
     default_location: "广州"
+    # 开启后，若用户原话没有明确包含工具参数中的地点，则忽略该地点并使用default_location，避免大模型臆造城市
+    strict_location_from_query: true
   # 获取新闻插件的配置，这里根据需要的新闻类型传入对应的url链接，默认支持社会、科技、财经新闻
   # 更多类型的新闻列表查看 https://www.chinanews.com.cn/rss/
   get_news_from_chinanews:
@@ -422,6 +429,8 @@ ASR:
     enable_early_llm: false
     early_llm_min_chars: 4
     early_llm_stable_seconds: 0.6
+    # VAD 判停后再等一小段时间确认，期间如果用户继续说话就取消本次断句
+    vad_stop_grace_ms: 200
     # 播放中用户插话打断模式：
     #   off       关闭播放中打断，适合 AEC/拾音还没调稳时使用
     #   normal    默认推荐，只在“停一下/等等/不是/明显新问题”等明确插话时打断
@@ -434,7 +443,7 @@ ASR:
     # 是否启用 sherpa-onnx 端点检测；同时仍保留项目 VAD 停止作为兜底
     enable_endpoint_detection: true
     rule1_min_trailing_silence: 2.4
-    rule2_min_trailing_silence: 0.8
+    rule2_min_trailing_silence: 1.0
     rule3_min_utterance_length: 300
   DoubaoASR:
     # 可以在这里申请相关Key等信息
@@ -661,7 +670,7 @@ VAD:
     threshold: 0.5
     threshold_low: 0.3
     model_dir: models/snakers4_silero-vad
-    min_silence_duration_ms: 600  # 说话停顿超过此值(ms)才判定为结束，200容易截断，建议500-800
+    min_silence_duration_ms: 700  # 说话停顿超过此值(ms)才判定为结束，短停顿容易截断，建议600-900
 
 LLM:
   # 所有openai类型均可以修改超参，以AliLLM为例
@@ -1188,6 +1197,14 @@ TTS:
     spk_id: 0  # 发音人 ID，0 通常表示默认的发音人
     speed: 1.0  # 语速，1.0 表示正常语速，>1 表示加快，<1 表示减慢
     volume: 1.0  # 音量，1.0 表示正常音量，>1 表示增大，<1 表示减小
+    sample_rate: 24000  # PaddleSpeech PCM采样率；应与 xiaozhi.audio_params.sample_rate 保持一致
+    fade_ms: 5  # 默认淡入淡出时长；可用 fade_in_ms/fade_out_ms 分别覆盖
+    fade_in_ms: 0  # 不压低首字起音，避免第一个字被吞
+    fade_out_ms: 5  # 保留段尾淡出，降低分段拼接click/尖刺
+    target_peak: 0.92  # 峰值限幅，避免削波导致尖刺
+    first_chunk_leading_silence_ms: 60  # 仅首段TTS前补静音，保护LLM首字不被设备起播吞掉
+    first_chunk_onset_gain: 1.2  # 轻微增强首段前几个字的起音，改善“我是...”这类软起音
+    first_chunk_onset_ms: 180
     save_path:   # 保存路径
     # language: "中文"  # 指定输出语种,如:中文、英语、日语、韩语等,请根据所选音色支持的语言进行设置,不填则默认为中文
   IndexStreamTTS:

@@ -38,6 +38,63 @@ EMOJI_RANGES = [
     (0x2700, 0x27BF),
 ]
 
+LICHUANG_EMOTIONS = {
+    "neutral",
+    "happy",
+    "laughing",
+    "funny",
+    "sad",
+    "angry",
+    "crying",
+    "loving",
+    "embarrassed",
+    "surprised",
+    "shocked",
+    "thinking",
+    "winking",
+    "cool",
+    "relaxed",
+    "delicious",
+    "kissy",
+    "confident",
+    "sleepy",
+    "silly",
+    "confused",
+}
+
+COMMON_DISPLAY_EMOTION_ALIASES = {
+    "cry": "crying",
+    "anger": "angry",
+    "surprise": "surprised",
+    "sleep": "sleepy",
+    "wakeup": "happy",
+    "awkward": "embarrassed",
+    "look_left": "neutral",
+    "look_right": "neutral",
+    "look_up": "thinking",
+    "look_down": "sleepy",
+    "look_center": "neutral",
+    "nod": "happy",
+    "nod_happy": "happy",
+    "shake": "confused",
+    "shake_angry": "angry",
+    "spin": "happy",
+    "blink": "winking",
+    "dance": "happy",
+}
+
+
+def map_emotion_for_device(conn: "ConnectionHandler", emotion: str) -> str:
+    """Map model emotion output to the emotion dialect supported by the connected board."""
+    raw = (emotion or "").strip().lower()
+    if not raw:
+        return "neutral"
+
+    # Both lichuang-dev and taibai receive emotion through Display::SetEmotion().
+    # Taibai maps common xiaozhi names like "angry" to its internal "anger" action.
+    mapped = COMMON_DISPLAY_EMOTION_ALIASES.get(raw, raw)
+    return mapped if mapped in LICHUANG_EMOTIONS else "neutral"
+
 
 def get_string_no_punctuation_or_emoji(s):
     """去除字符串首尾的空格、标点符号和表情符号"""
@@ -75,6 +132,8 @@ def is_punctuation_or_emoji(char):
         "]",  # 方括号
         "【",
         "】",  # 中文方括号
+        "~",
+        "～",  # 半角/全角波浪号，避免 TTS 将语气尾符读成拼音
     }
     if char.isspace() or char in punctuation_set:
         return True
@@ -90,13 +149,14 @@ async def get_emotion(conn: "ConnectionHandler", text):
             emoji = char
             emotion = EMOJI_MAP[char]
             break
+    mapped_emotion = map_emotion_for_device(conn, emotion)
     try:
         await conn.websocket.send(
             json.dumps(
                 {
                     "type": "llm",
                     "text": emoji,
-                    "emotion": emotion,
+                    "emotion": mapped_emotion,
                     "session_id": conn.session_id,
                 }
             )
@@ -108,13 +168,18 @@ async def get_emotion(conn: "ConnectionHandler", text):
 
 async def send_emotion_direct(conn: "ConnectionHandler", emotion: str, text: str = ""):
     """直接向客户端发送 emotion 字符串（用于 JSON 格式响应，如 dance/nod_happy 等）"""
+    mapped_emotion = map_emotion_for_device(conn, emotion)
+    board_name = getattr(conn, "device_board_name", None) or "unknown"
+    conn.logger.bind(tag=TAG).info(
+        f"emotion发送: board={board_name}, raw={emotion}, mapped={mapped_emotion}"
+    )
     try:
         await conn.websocket.send(
             json.dumps(
                 {
                     "type": "llm",
                     "text": text,
-                    "emotion": emotion,
+                    "emotion": mapped_emotion,
                     "session_id": conn.session_id,
                 }
             )

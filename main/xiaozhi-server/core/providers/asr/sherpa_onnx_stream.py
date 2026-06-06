@@ -60,6 +60,7 @@ class ASRProvider(ASRProviderBase):
             config.get("early_llm_stable_seconds", 0.6)
         )
         self.preroll_frames = int(config.get("preroll_frames", 10))
+        self.vad_stop_grace_seconds = float(config.get("vad_stop_grace_ms", 300)) / 1000
         # 运行时状态
         self.recognizer = None
         self.stream = None
@@ -75,6 +76,7 @@ class ASRProvider(ASRProviderBase):
         self.last_text_change_time = 0.0
         self.decoder_opus = opuslib_next.Decoder(16000, 1)
         self._conn = None
+        self._pending_vad_stop_task = None
 
         self._init_recognizer()
 
@@ -164,6 +166,10 @@ class ASRProvider(ASRProviderBase):
         await super().receive_audio(conn, audio, audio_have_voice)
         self._conn = conn
 
+        if audio_have_voice:
+            self._cancel_pending_vad_stop()
+            conn.client_voice_stop = False
+
         # 语音开始且没有活跃 stream -> 创建新 stream
         if audio_have_voice and not self.is_processing and not self._is_stopping:
             try:
@@ -204,9 +210,17 @@ class ASRProvider(ASRProviderBase):
             self.is_processing
             and conn.client_voice_stop
             and not self._is_stopping
+            and (
+                self._pending_vad_stop_task is None
+                or self._pending_vad_stop_task.done()
+            )
         ):
-            logger.bind(tag=TAG).debug("VAD 检测到语音结束，触发流式识别停止")
-            asyncio.create_task(self._send_stop_request())
+            logger.bind(tag=TAG).debug(
+                f"VAD 检测到语音结束，等待 {self.vad_stop_grace_seconds:.2f}s 确认"
+            )
+            self._pending_vad_stop_task = asyncio.create_task(
+                self._confirm_vad_stop(conn)
+            )
 
     # ------------------------------------------------------------------ #
     # 后台识别循环
@@ -285,6 +299,7 @@ class ASRProvider(ASRProviderBase):
             self._finalizing = False
             self.early_chat_started = False
             self.early_chat_text = ""
+            self._cancel_pending_vad_stop()
             # 重置连接音频状态，清理 asr_audio 缓存和 VAD 标志
             try:
                 conn.reset_audio_states()
@@ -313,6 +328,27 @@ class ASRProvider(ASRProviderBase):
         except Exception as e:
             logger.bind(tag=TAG).error(f"发送 tail padding 失败: {e}")
             self._is_stopping = False
+
+    async def _confirm_vad_stop(self, conn: "ConnectionHandler"):
+        try:
+            if self.vad_stop_grace_seconds > 0:
+                await asyncio.sleep(self.vad_stop_grace_seconds)
+            if (
+                self.stream
+                and self.is_processing
+                and conn.client_voice_stop
+                and not self._is_stopping
+            ):
+                logger.bind(tag=TAG).debug("VAD 停止确认完成，触发流式识别停止")
+                await self._send_stop_request()
+        except asyncio.CancelledError:
+            logger.bind(tag=TAG).debug("VAD 停止确认已取消，继续当前语音")
+            raise
+
+    def _cancel_pending_vad_stop(self):
+        if self._pending_vad_stop_task and not self._pending_vad_stop_task.done():
+            self._pending_vad_stop_task.cancel()
+        self._pending_vad_stop_task = None
 
     async def _feed_preroll_audio(self, conn: "ConnectionHandler"):
         """把VAD触发前缓存的少量音频喂给识别器，避免吞掉句首。"""
@@ -392,6 +428,7 @@ class ASRProvider(ASRProviderBase):
         self.early_chat_started = False
         self.early_chat_text = ""
         self.last_text_change_time = 0.0
+        self._cancel_pending_vad_stop()
 
     # ------------------------------------------------------------------ #
     # 接口适配
@@ -425,6 +462,7 @@ class ASRProvider(ASRProviderBase):
         self.early_chat_started = False
         self.early_chat_text = ""
         self.stream = None
+        self._cancel_pending_vad_stop()
 
         if hasattr(self, "decoder_opus") and self.decoder_opus:
             try:

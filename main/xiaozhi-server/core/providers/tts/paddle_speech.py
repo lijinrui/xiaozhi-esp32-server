@@ -1,8 +1,10 @@
 import io
+import re
 import wave
 import json
 import base64
 import asyncio
+import threading
 import websockets
 import numpy as np
 from datetime import datetime
@@ -25,6 +27,8 @@ class TTSProvider(TTSProviderBase):
         super().__init__(config, delete_audio_file)
         self.url = config.get("url", "ws://192.168.1.10:8092/paddlespeech/tts/streaming")
         self.protocol = config.get("protocol", "websocket")
+        self.timeout_seconds = int(config.get("tts_timeout", 60) or 60)
+        self._synthesis_lock = threading.Lock()
         
         if config.get("private_voice"):
             self.spk_id = int(config.get("private_voice"))
@@ -36,6 +40,18 @@ class TTSProvider(TTSProviderBase):
         
         volume = config.get("volume", 1.0)
         self.volume = float(volume) if volume else 1.0
+        self.sample_rate = int(config.get("sample_rate", 24000) or 24000)
+        self.fade_ms = float(config.get("fade_ms", 5) or 0)
+        self.fade_in_ms = float(config.get("fade_in_ms", self.fade_ms) or 0)
+        self.fade_out_ms = float(config.get("fade_out_ms", self.fade_ms) or 0)
+        self.target_peak = float(config.get("target_peak", 0.92) or 0.92)
+        self.first_chunk_leading_silence_ms = int(
+            config.get("first_chunk_leading_silence_ms", 60) or 0
+        )
+        self.first_chunk_onset_gain = float(
+            config.get("first_chunk_onset_gain", 1.2) or 1.0
+        )
+        self.first_chunk_onset_ms = int(config.get("first_chunk_onset_ms", 180) or 0)
         
         self.delete_audio_file = config.get("delete_audio", True)
 
@@ -67,7 +83,7 @@ class TTSProvider(TTSProviderBase):
         :param bits_per_sample: 每个样本的位数，默认为16
         :return: WAV 格式的字节数据
         """
-        byte_data = np.frombuffer(pcm_data, dtype=np.int16)  # 16位PCM
+        byte_data = self._condition_pcm(pcm_data, sample_rate)
         wav_io = io.BytesIO()
 
         with wave.open(wav_io, "wb") as wav_file:
@@ -78,11 +94,92 @@ class TTSProvider(TTSProviderBase):
 
         return wav_io.getvalue()
 
+    def _condition_pcm(self, pcm_data: bytes, sample_rate: int) -> np.ndarray:
+        pcm = np.frombuffer(pcm_data, dtype=np.int16).copy()
+        if pcm.size == 0:
+            return pcm
+
+        max_abs = int(np.max(np.abs(pcm.astype(np.int32))))
+        target_abs = int(32767 * max(0.1, min(self.target_peak, 1.0)))
+        if max_abs > target_abs:
+            pcm = (pcm.astype(np.float32) * (target_abs / max_abs)).astype(np.int16)
+
+        fade_in_samples = int(sample_rate * self.fade_in_ms / 1000)
+        fade_out_samples = int(sample_rate * self.fade_out_ms / 1000)
+        if fade_in_samples > 0 and pcm.size > fade_in_samples * 2:
+            fade_in = np.linspace(0.0, 1.0, fade_in_samples, dtype=np.float32)
+            pcm[:fade_in_samples] = (
+                pcm[:fade_in_samples].astype(np.float32) * fade_in
+            ).astype(np.int16)
+        if fade_out_samples > 0 and pcm.size > fade_out_samples * 2:
+            fade_out = np.linspace(1.0, 0.0, fade_out_samples, dtype=np.float32)
+            pcm[-fade_out_samples:] = (
+                pcm[-fade_out_samples:].astype(np.float32) * fade_out
+            ).astype(np.int16)
+
+        return pcm
+
     async def text_to_speak(self, text, output_file):
+        text = self._normalize_text(text)
         if self.protocol == "websocket":
-            return await self.text_streaming(text, output_file)
+            with self._synthesis_lock:
+                return await self.text_streaming(text, output_file)
         else:
             raise ValueError("Unsupported protocol. Please use 'websocket' or 'http'.")
+
+    def _prepare_first_tts_audio(self, audio_bytes: bytes) -> bytes:
+        if self.first_chunk_leading_silence_ms <= 0 or not audio_bytes:
+            return audio_bytes
+
+        try:
+            with wave.open(io.BytesIO(audio_bytes), "rb") as source:
+                params = source.getparams()
+                pcm = source.readframes(source.getnframes())
+
+            silence_frames = int(params.framerate * self.first_chunk_leading_silence_ms / 1000)
+            silence = b"\x00" * silence_frames * params.nchannels * params.sampwidth
+            pcm = self._boost_first_chunk_onset(pcm, params)
+
+            wav_io = io.BytesIO()
+            with wave.open(wav_io, "wb") as target:
+                target.setparams(params)
+                target.writeframes(silence + pcm)
+            return wav_io.getvalue()
+        except Exception as exc:
+            logger.bind(tag=TAG).warning(f"添加首段TTS前导静音失败: {exc}")
+            return audio_bytes
+
+    def _boost_first_chunk_onset(self, pcm_bytes: bytes, params) -> bytes:
+        if self.first_chunk_onset_ms <= 0 or self.first_chunk_onset_gain <= 1.0:
+            return pcm_bytes
+        if params.sampwidth != 2:
+            return pcm_bytes
+
+        pcm = np.frombuffer(pcm_bytes, dtype=np.int16).copy()
+        if pcm.size == 0:
+            return pcm_bytes
+
+        onset_samples = int(params.framerate * self.first_chunk_onset_ms / 1000)
+        onset_values = onset_samples * params.nchannels
+        if onset_values <= 0:
+            return pcm_bytes
+
+        onset_values = min(onset_values, pcm.size)
+        target_abs = int(32767 * max(0.1, min(self.target_peak, 1.0)))
+        segment = pcm[:onset_values].astype(np.float32) * self.first_chunk_onset_gain
+        segment = np.clip(segment, -target_abs, target_abs)
+        pcm[:onset_values] = segment.astype(np.int16)
+        return pcm.tobytes()
+
+    @staticmethod
+    def _normalize_text(text):
+        if not text:
+            return text
+        text = re.sub(r"(\d)\s*[~～]\s*(\d)", r"\1到\2", text)
+        text = re.sub(r"\.{2,}|…+", "，", text)
+        text = re.sub(r"[~～]+", "", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text
 
     async def text_streaming(self, text, output_file):
         try:
@@ -111,10 +208,9 @@ class TTSProvider(TTSProviderBase):
                 await ws.send(json.dumps(data_request))
 
                 audio_chunks = b""
-                timeout_seconds = 60  # 设置超时
                 try:
                     while True:
-                        response = await asyncio.wait_for(ws.recv(), timeout=timeout_seconds)
+                        response = await asyncio.wait_for(ws.recv(), timeout=self.timeout_seconds)
                         response = json.loads(response)  # 解析 JSON 响应
                         status = response.get("status")
 
@@ -124,10 +220,10 @@ class TTSProvider(TTSProviderBase):
                             # 拼接音频数据（base64 编码的 PCM 数据）
                             audio_chunks += base64.b64decode(response.get("audio"))
                 except asyncio.TimeoutError:
-                    raise Exception(f"WebSocket 超时：等待音频数据超过 {timeout_seconds} 秒")
+                    raise Exception(f"WebSocket 超时：等待音频数据超过 {self.timeout_seconds} 秒")
 
                 # 将拼接后的 PCM 数据转换为 WAV 格式
-                wav_data = await self.pcm_to_wav(audio_chunks)
+                wav_data = await self.pcm_to_wav(audio_chunks, sample_rate=self.sample_rate)
 
                 # 结束请求
                 end_request = {

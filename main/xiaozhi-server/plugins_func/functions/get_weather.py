@@ -11,21 +11,38 @@ if TYPE_CHECKING:
 TAG = __name__
 logger = setup_logging()
 
+NON_LOCATION_WORDS = {
+    "今天",
+    "明天",
+    "后天",
+    "昨天",
+    "现在",
+    "当前",
+    "本地",
+    "当地",
+    "这里",
+    "这边",
+    "附近",
+    "当前位置",
+}
+
 GET_WEATHER_FUNCTION_DESC = {
     "type": "function",
     "function": {
         "name": "get_weather",
         "description": (
-            "获取某个地点的天气，用户应提供一个位置，比如用户说杭州天气，参数为：杭州。"
+            "查询天气、气温、降雨、空气质量、未来预报、穿衣建议等实时天气信息时调用。"
+            "用户明确说出城市、省份或地名时，location只填写用户原话里的地点。"
+            "用户未指定城市时也应调用此工具，并省略location参数，服务端会使用配置的默认地点。"
+            "严禁在用户未说地点时根据示例、上下文或猜测自行填写location。"
             "如果用户说的是省份，默认用省会城市。如果用户说的不是省份或城市而是一个地名，默认用该地所在省份的省会城市。"
-            "重要：本地未来7天天气已在上下文中提供，用户未指明其他城市时绝对不要调用此工具。"
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "location": {
                     "type": "string",
-                    "description": "地点名，例如杭州。可选参数，如果不提供则不传",
+                    "description": "可选地点名。只有用户明确说出地点时才填写；未说地点时必须省略，不要追问也不要猜测。",
                 },
                 "lang": {
                     "type": "string",
@@ -168,10 +185,28 @@ def get_weather(conn: "ConnectionHandler", location: str = None, lang: str = "zh
     default_location = weather_config.get("default_location", "广州")
     client_ip = conn.client_ip
 
-    # 优先使用用户提供的location参数
+    if location:
+        location = str(location).strip()
+        if location in NON_LOCATION_WORDS:
+            logger.bind(tag=TAG).warning(
+                f"天气工具忽略非地点参数: location={location}, default={default_location}"
+            )
+            location = None
+
+    if location:
+        current_query = str(getattr(conn, "current_query", "") or "")
+        strict_location = weather_config.get("strict_location_from_query", True)
+        if strict_location and current_query and str(location) not in current_query:
+            logger.bind(tag=TAG).warning(
+                f"天气工具忽略疑似臆造地点: location={location}, query={current_query}, default={default_location}"
+            )
+            location = None
+
+    # 优先使用用户提供的location参数；未指定城市时优先使用配置默认地点，避免IP定位漂移。
     if not location:
-        # 通过客户端IP解析城市
-        if client_ip:
+        location = default_location
+        # 若未配置默认地点，再通过客户端IP解析城市
+        if not location and client_ip:
             # 先从缓存获取IP对应的城市信息
             cached_ip_info = cache_manager.get(CacheType.IP_INFO, client_ip)
             if cached_ip_info:
@@ -182,12 +217,6 @@ def get_weather(conn: "ConnectionHandler", location: str = None, lang: str = "zh
                 if ip_info:
                     cache_manager.set(CacheType.IP_INFO, client_ip, ip_info)
                     location = ip_info.get("city")
-
-            if not location:
-                location = default_location
-        else:
-            # 若无IP，使用默认位置
-            location = default_location
     # 尝试从缓存获取完整天气报告
     weather_cache_key = f"full_weather_{location}_{lang}"
     cached_weather_report = cache_manager.get(CacheType.WEATHER, weather_cache_key)

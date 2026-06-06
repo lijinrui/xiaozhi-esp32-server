@@ -579,4 +579,3 @@ Transport:
   ESP32 保持 WebSocket。
   PC/browser validator 可参考 WebRTC/SmallWebRTC/LiveKit。
 ```
-

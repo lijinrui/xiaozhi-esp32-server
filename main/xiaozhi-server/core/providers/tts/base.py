@@ -2,9 +2,11 @@ import os
 import re
 import uuid
 import queue
+import time
 import asyncio
 import threading
 import traceback
+import unicodedata
 import concurrent.futures
 
 from core.utils import p3
@@ -38,6 +40,8 @@ class TTSProviderBase(ABC):
         self.audio_file_type = "wav"
         self.output_file = config.get("output_dir", "tmp/")
         self.tts_timeout = int(config.get("tts_timeout", 15))
+        self.max_tts_retries = int(config.get("max_tts_retries", 2))
+        self.max_tts_segment_chars = int(config.get("max_tts_segment_chars", 120))
         self.tts_text_queue = queue.Queue()
         self.tts_audio_queue = queue.Queue()
         self.tts_audio_first_sentence = True
@@ -171,40 +175,97 @@ class TTSProviderBase(ABC):
             )
         return tts_text, display_text
 
+    @staticmethod
+    def _has_speakable_text(text):
+        if not text or not text.strip():
+            return False
+        return any(
+            not char.isspace()
+            and not unicodedata.category(char).startswith(("P", "S"))
+            for char in text
+        )
+
+    def _tts_turn_cancelled(self):
+        turn_id = getattr(self, "current_turn_id", None)
+        return self.conn.client_abort or not self.conn.is_current_turn(turn_id)
+
+    def _split_tts_text(self, text, max_chars=None):
+        max_chars = max_chars or self.max_tts_segment_chars
+        if not text or len(text) <= max_chars:
+            return [text] if text else []
+
+        chunks = []
+        remaining = text.strip()
+        split_chars = "。！？；;，,、：:"
+        while len(remaining) > max_chars:
+            split_at = -1
+            window = remaining[:max_chars]
+            for punct in split_chars:
+                pos = window.rfind(punct)
+                if pos > split_at:
+                    split_at = pos
+            if split_at < max_chars // 3:
+                split_at = max_chars - 1
+            chunk = remaining[: split_at + 1].strip()
+            if chunk:
+                chunks.append(chunk)
+            remaining = remaining[split_at + 1 :].strip()
+        if remaining:
+            chunks.append(remaining)
+        return chunks
+
+    def _prepare_first_tts_audio(self, audio_bytes: bytes) -> bytes:
+        return audio_bytes
+
     def to_tts_stream(self, text, opus_handler: Callable[[bytes], None] = None) -> None:
         text, display_text = self._prepare_tts_texts(text)
-        max_repeat_time = 5
+        if not self._has_speakable_text(text):
+            logger.bind(tag=TAG).debug(f"跳过空TTS文本: {display_text}")
+            return None
+        text_chunks = self._split_tts_text(text)
+        display_chunks = self._split_tts_text(display_text)
+        if len(display_chunks) != len(text_chunks):
+            display_chunks = text_chunks
         if self.delete_audio_file:
             # 需要删除文件的直接转为音频数据
-            while max_repeat_time > 0:
-                try:
-                    audio_bytes = asyncio.run(self.text_to_speak(text, None))
-                    if audio_bytes:
-                        self.queue_audio(SentenceType.FIRST, None, display_text)
-                        audio_bytes_to_data_stream(
-                            audio_bytes,
-                            file_type=self.audio_file_type,
-                            is_opus=True,
-                            callback=opus_handler,
-                            sample_rate=self.conn.sample_rate,
-                            opus_encoder=self.opus_encoder,
+            for chunk_index, chunk_text in enumerate(text_chunks):
+                chunk_display_text = display_chunks[chunk_index]
+                max_repeat_time = self.max_tts_retries
+                while max_repeat_time > 0:
+                    if self._tts_turn_cancelled():
+                        logger.bind(tag=TAG).info(
+                            f"取消旧turn TTS生成: {chunk_display_text}"
                         )
-                        break
-                    else:
+                        return None
+                    try:
+                        audio_bytes = asyncio.run(self.text_to_speak(chunk_text, None))
+                        if audio_bytes:
+                            if chunk_index == 0:
+                                audio_bytes = self._prepare_first_tts_audio(audio_bytes)
+                            self.queue_audio(SentenceType.FIRST, None, chunk_display_text)
+                            audio_bytes_to_data_stream(
+                                audio_bytes,
+                                file_type=self.audio_file_type,
+                                is_opus=True,
+                                callback=opus_handler,
+                                sample_rate=self.conn.sample_rate,
+                                opus_encoder=self.opus_encoder,
+                            )
+                            break
                         max_repeat_time -= 1
-                except Exception as e:
-                    logger.bind(tag=TAG).warning(
-                        f"语音生成失败{5 - max_repeat_time + 1}次: {display_text}，错误: {e}"
+                    except Exception as e:
+                        logger.bind(tag=TAG).warning(
+                            f"语音生成失败{self.max_tts_retries - max_repeat_time + 1}次: {chunk_display_text}，错误: {e}"
+                        )
+                        max_repeat_time -= 1
+                if max_repeat_time > 0:
+                    logger.bind(tag=TAG).info(
+                        f"语音生成成功: {chunk_display_text}，重试{self.max_tts_retries - max_repeat_time}次"
                     )
-                    max_repeat_time -= 1
-            if max_repeat_time > 0:
-                logger.bind(tag=TAG).info(
-                    f"语音生成成功: {display_text}，重试{5 - max_repeat_time}次"
-                )
-            else:
-                logger.bind(tag=TAG).error(
-                    f"语音生成失败: {display_text}，请检查网络或服务是否正常"
-                )
+                else:
+                    logger.bind(tag=TAG).error(
+                        f"语音生成失败: {chunk_display_text}，跳过该段以避免阻塞后续对话"
+                    )
             return None
         else:
             tmp_file = self.generate_filename()
@@ -237,6 +298,9 @@ class TTSProviderBase(ABC):
     
     def to_tts(self, text):
         text, display_text = self._prepare_tts_texts(text)
+        if not self._has_speakable_text(text):
+            logger.bind(tag=TAG).debug(f"跳过空TTS文本: {display_text}")
+            return []
         max_repeat_time = 5
         if self.delete_audio_file:
             # 需要删除文件的直接转为音频数据
@@ -513,6 +577,18 @@ class TTSProviderBase(ABC):
                     add_device_output(self.conn.headers.get("device-id"), len(text))
 
             except Exception as e:
+                error_text = str(e)
+                websocket_closed = (
+                    "no close frame received or sent" in error_text
+                    or "ConnectionClosed" in type(e).__name__
+                    or "connection is closed" in error_text.lower()
+                    or "websocket" in error_text.lower()
+                )
+                if self.conn.stop_event.is_set() or self.conn.client_abort or websocket_closed:
+                    logger.bind(tag=TAG).debug(
+                        f"audio_play_priority_thread stopped after connection close: {text} {e}"
+                    )
+                    break
                 logger.bind(tag=TAG).error(f"audio_play_priority_thread: {text} {e}")
 
     async def start_session(self, session_id):
@@ -558,7 +634,7 @@ class TTSProviderBase(ABC):
             if self.is_first_sentence:
                 self.is_first_sentence = False
 
-            return segment_text
+            return segment_text or None
         elif self.tts_stop_request and current_text:
             segment_text = current_text
             self.is_first_sentence = True  # 重置标志

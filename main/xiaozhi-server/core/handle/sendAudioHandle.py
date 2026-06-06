@@ -2,6 +2,7 @@ import json
 import time
 import asyncio
 from typing import TYPE_CHECKING
+import opuslib_next
 
 if TYPE_CHECKING:
     from core.connection import ConnectionHandler
@@ -15,6 +16,7 @@ TAG = __name__
 AUDIO_FRAME_DURATION = 60
 # 预缓冲包数量，直接发送以减少延迟
 PRE_BUFFER_COUNT = 5
+_SILENCE_OPUS_CACHE = {}
 
 
 async def sendAudioMessage(conn: "ConnectionHandler", sentenceType, audios, text, sentence_id=None):
@@ -92,13 +94,48 @@ async def _send_tts_start_padding(conn: "ConnectionHandler"):
     """发送少量静音帧，给设备播放器起播缓冲，避免吞掉首字。"""
     selected_asr = conn.config.get("selected_module", {}).get("ASR")
     asr_config = conn.config.get("ASR", {}).get(selected_asr, {})
-    padding_frames = int(asr_config.get("tts_start_padding_frames", 0) or 0)
+    padding_frames = int(
+        conn.config.get(
+            "tts_start_padding_frames",
+            asr_config.get("tts_start_padding_frames", 0),
+        )
+        or 0
+    )
     if padding_frames <= 0:
         return
 
-    silence = b"\xF8\xFF\xFE"
+    silence = _get_opus_silence_frame(conn)
+    if not silence:
+        return
+    if _audio_debug_enabled(conn):
+        conn.logger.bind(tag=TAG).info(
+            "tts start padding "
+            f"frames={padding_frames}, sample_rate={getattr(conn, 'sample_rate', None)}, "
+            f"frame_ms={AUDIO_FRAME_DURATION}, packet_bytes={len(silence)}"
+        )
     for _ in range(padding_frames):
         await sendAudio(conn, silence)
+
+
+def _get_opus_silence_frame(conn: "ConnectionHandler"):
+    sample_rate = int(getattr(conn, "sample_rate", 16000) or 16000)
+    frame_duration = AUDIO_FRAME_DURATION
+    cache_key = (sample_rate, frame_duration)
+    if cache_key in _SILENCE_OPUS_CACHE:
+        return _SILENCE_OPUS_CACHE[cache_key]
+
+    frame_size = sample_rate * frame_duration // 1000
+    pcm_silence = b"\x00" * frame_size * 2
+    try:
+        encoder = opuslib_next.Encoder(sample_rate, 1, opuslib_next.APPLICATION_AUDIO)
+        packet = encoder.encode(pcm_silence, frame_size)
+    except Exception as exc:
+        conn.logger.bind(tag=TAG).warning(
+            f"生成TTS起播静音帧失败: sample_rate={sample_rate}, error={exc}"
+        )
+        return None
+    _SILENCE_OPUS_CACHE[cache_key] = packet
+    return packet
 
 
 async def _send_to_mqtt_gateway(
@@ -205,6 +242,8 @@ def _get_or_create_rate_controller(
             "sequence": 0,
             "sentence_id": conn.sentence_id,
             "turn_id": conn.get_sentence_turn_id(conn.sentence_id),
+            "debug_started_at": time.monotonic(),
+            "debug_last_send_at": None,
         }
 
         # 启动后台发送循环
@@ -293,10 +332,47 @@ async def _do_send_audio(conn: "ConnectionHandler", opus_packet, flow_control):
         # 直接发送opus数据包
         await conn.websocket.send(opus_packet)
     conn.mark_tts_first_audio(turn_id)
+    _log_audio_packet_debug(conn, opus_packet, flow_control, packet_index)
 
     # 更新流控状态
     flow_control["packet_count"] = packet_index + 1
     flow_control["sequence"] = sequence + 1
+
+
+def _audio_debug_enabled(conn: "ConnectionHandler"):
+    return bool(
+        conn.config.get("debug_turn_latency_metrics")
+        or conn.config.get("debug_tts_audio_packets")
+    )
+
+
+def _log_audio_packet_debug(conn: "ConnectionHandler", opus_packet, flow_control, packet_index):
+    if not _audio_debug_enabled(conn):
+        return
+
+    max_packets = int(conn.config.get("tts_audio_debug_first_packets", 12) or 12)
+    if packet_index >= max_packets:
+        return
+
+    now = time.monotonic()
+    started_at = flow_control.get("debug_started_at") or now
+    last_send_at = flow_control.get("debug_last_send_at")
+    elapsed_ms = (now - started_at) * 1000
+    gap_ms = None if last_send_at is None else (now - last_send_at) * 1000
+    flow_control["debug_last_send_at"] = now
+
+    path = "prebuffer" if packet_index < PRE_BUFFER_COUNT else "paced"
+    queue_len = 0
+    if hasattr(conn, "audio_rate_controller") and conn.audio_rate_controller:
+        queue_len = len(conn.audio_rate_controller.queue)
+
+    conn.logger.bind(tag=TAG).info(
+        "tts audio packet "
+        f"turn_id={flow_control.get('turn_id')}, idx={packet_index}, path={path}, "
+        f"bytes={len(opus_packet)}, sample_rate={getattr(conn, 'sample_rate', None)}, "
+        f"frame_ms={AUDIO_FRAME_DURATION}, elapsed_ms={elapsed_ms:.1f}, "
+        f"gap_ms={'-' if gap_ms is None else f'{gap_ms:.1f}'}, queue_len={queue_len}"
+    )
 
 
 async def send_tts_message(conn: "ConnectionHandler", state, text=None, turn_id=None):

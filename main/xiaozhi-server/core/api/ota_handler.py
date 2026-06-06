@@ -122,7 +122,10 @@ class OTAHandler(BaseHandler):
             self.logger.bind(tag=TAG).error(f"生成MQTT密码签名失败: {e}")
             return ""
 
-    def _get_websocket_url(self, local_ip: str, port: int) -> str:
+    def _is_wan_ota_request(self, request) -> bool:
+        return request.path.rstrip("/").endswith("/ota/wan")
+
+    def _get_websocket_url(self, local_ip: str, port: int, wan: bool = False) -> str:
         """获取websocket地址
 
         Args:
@@ -133,12 +136,12 @@ class OTAHandler(BaseHandler):
             str: websocket地址
         """
         server_config = self.config["server"]
-        websocket_config = server_config.get("websocket", "")
+        config_key = "websocket_wan" if wan else "websocket"
+        websocket_config = server_config.get(config_key, "")
 
-        if "你的" not in websocket_config:
+        if websocket_config and "你的" not in websocket_config:
             return websocket_config
-        else:
-            return f"ws://{local_ip}:{port}/xiaozhi/v1/"
+        return f"ws://{local_ip}:{port}/xiaozhi/v1/"
 
     async def handle_post(self, request):
         """处理 OTA POST 请求
@@ -174,6 +177,7 @@ class OTAHandler(BaseHandler):
                 data_json = {}
 
             server_config = self.config["server"]
+            wan_ota = self._is_wan_ota_request(request)
             # Distinguish ports:
             # - websocket_port is used to construct websocket URL (server["port"])
             # - http_port is used to construct OTA download URLs (server["http_port"])
@@ -290,11 +294,14 @@ class OTAHandler(BaseHandler):
                         token = self.auth.generate_token(client_id, device_id)
                 # NOTE: use websocket_port here
                 return_json["websocket"] = {
-                    "url": self._get_websocket_url(local_ip, websocket_port),
+                    "url": self._get_websocket_url(
+                        local_ip, websocket_port, wan=wan_ota
+                    ),
                     "token": token,
                 }
                 self.logger.bind(tag=TAG).info(
                     f"未配置MQTT网关，为设备 {device_id} 下发WebSocket配置"
+                    f" ({'wan' if wan_ota else 'lan'})"
                 )
 
             # Now check firmware files for updates
@@ -359,7 +366,11 @@ class OTAHandler(BaseHandler):
             local_ip = get_local_ip()
             # use websocket port for websocket URL
             websocket_port = int(server_config.get("port", 8000))
-            websocket_url = self._get_websocket_url(local_ip, websocket_port)
+            websocket_url = self._get_websocket_url(
+                local_ip,
+                websocket_port,
+                wan=self._is_wan_ota_request(request),
+            )
             message = f"OTA接口运行正常，向设备发送的websocket地址是：{websocket_url}"
             response = web.Response(text=message, content_type="text/plain")
         except Exception as e:

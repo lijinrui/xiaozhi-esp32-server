@@ -144,6 +144,8 @@ async def handle_mcp_message(
             if isinstance(server_info, dict):
                 name = server_info.get("name")
                 version = server_info.get("version")
+                conn.device_board_name = name
+                conn.device_board_version = version
                 logger.bind(tag=TAG).debug(
                     f"客户端MCP服务器信息: name={name}, version={version}"
                 )

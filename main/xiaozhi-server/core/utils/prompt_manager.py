@@ -71,6 +71,10 @@ class PromptManager:
 
         self._load_base_template()
 
+    def _get_default_weather_location(self) -> str:
+        weather_config = self.config.get("plugins", {}).get("get_weather", {}) or {}
+        return str(weather_config.get("default_location") or "").strip()
+
     def _load_base_template(self):
         """加载基础提示词模板"""
         try:
@@ -197,8 +201,10 @@ class PromptManager:
                     or "weather_info" in self.base_prompt_template
                 )
             ):
-                # 获取位置信息（使用全局缓存）
-                local_address = self._get_location_info(client_ip)
+                # 优先使用配置默认地点，避免IP定位把本地上下文漂移到其他城市。
+                local_address = self._get_default_weather_location()
+                if not local_address:
+                    local_address = self._get_location_info(client_ip)
 
             if (
                 self.base_prompt_template
@@ -240,9 +246,12 @@ class PromptManager:
 
             if client_ip:
                 # 获取位置信息（从全局缓存）
-                local_address = (
-                    self.cache_manager.get(self.CacheType.LOCATION, client_ip) or ""
-                )
+                local_address = self._get_default_weather_location()
+                if not local_address:
+                    local_address = (
+                        self.cache_manager.get(self.CacheType.LOCATION, client_ip)
+                        or ""
+                    )
 
                 # 获取天气信息（从全局缓存）
                 if local_address:

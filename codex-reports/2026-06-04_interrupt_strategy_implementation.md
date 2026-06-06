@@ -223,4 +223,3 @@ git diff --check PASS
 4. 做 spoken commit：
    被打断后 history 只保留已播放文本。
 ```
-
